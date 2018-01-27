@@ -119,81 +119,103 @@ static void __recover_inline_status(struct inode *inode, struct page *ipage)
 	return;
 }
 
-static bool f2fs_enable_inode_chksum(struct f2fs_sb_info *sbi, struct page *page)
+static bool f2fs_enable_node_chksum(struct f2fs_sb_info *sbi, struct page *page)
 {
-	struct f2fs_inode *ri = &F2FS_NODE(page)->i;
+	if (IS_INODE(page)) {
+		struct f2fs_inode *ri = &F2FS_NODE(page)->i;
+		int extra_isize = le32_to_cpu(ri->i_extra_isize);
 
-	if (!f2fs_sb_has_inode_chksum(sbi))
-		return false;
-
-	if (!IS_INODE(page) || !(ri->i_inline & F2FS_EXTRA_ATTR))
-		return false;
-
-	if (!F2FS_FITS_IN_INODE(ri, le16_to_cpu(ri->i_extra_isize),
-				i_inode_checksum))
-		return false;
+		if (!(ri->i_inline & F2FS_EXTRA_ATTR))
+			return false;
+		if (!f2fs_sb_has_inode_chksum(sbi))
+			return false;
+		if (!F2FS_FITS_IN_INODE(ri, extra_isize, i_inode_checksum))
+			return false;
+	} else {
+		if (!f2fs_sb_has_extended_node(sbi))
+			return false;
+		if (!f2fs_sb_has_node_checksum(sbi))
+			return false;
+		if (!F2FS_FITS_IN_NODE(sbi->extra_nsize, node_checksum))
+			return false;
+	}
 
 	return true;
 }
 
-static __u32 f2fs_inode_chksum(struct f2fs_sb_info *sbi, struct page *page)
+static __u32 f2fs_node_chksum(struct f2fs_sb_info *sbi, struct page *page)
 {
 	struct f2fs_node *node = F2FS_NODE(page);
-	struct f2fs_inode *ri = &node->i;
-	__le32 ino = node->footer.ino;
-	__le32 gen = ri->i_generation;
-	__u32 chksum, chksum_seed;
-	__u32 dummy_cs = 0;
-	unsigned int offset = offsetof(struct f2fs_inode, i_inode_checksum);
-	unsigned int cs_size = sizeof(dummy_cs);
+	__le32 append, ino = node->footer.ino;
+	__u32 chksum, chksum_seed, dummy_cs = 0;
+	unsigned int offset, cs_size = sizeof(dummy_cs);
+	bool is_inode = RAW_IS_INODE(node);
+
+	if (is_inode) {
+		append = node->i.i_generation;
+		offset = offsetof(struct f2fs_inode, i_inode_checksum);
+	} else {
+		append = node->footer.nid;
+		offset = offsetof(struct f2fs_node, node_checksum);
+	}
 
 	chksum = f2fs_chksum(sbi, sbi->s_chksum_seed, (__u8 *)&ino,
 							sizeof(ino));
-	chksum_seed = f2fs_chksum(sbi, chksum, (__u8 *)&gen, sizeof(gen));
+	chksum_seed = f2fs_chksum(sbi, chksum, (__u8 *)&append, sizeof(append));
 
-	chksum = f2fs_chksum(sbi, chksum_seed, (__u8 *)ri, offset);
+	chksum = f2fs_chksum(sbi, chksum_seed, (__u8 *)node, offset);
 	chksum = f2fs_chksum(sbi, chksum, (__u8 *)&dummy_cs, cs_size);
 	offset += cs_size;
-	chksum = f2fs_chksum(sbi, chksum, (__u8 *)ri + offset,
+	chksum = f2fs_chksum(sbi, chksum, (__u8 *)node + offset,
 						F2FS_BLKSIZE - offset);
 	return chksum;
 }
 
-bool f2fs_inode_chksum_verify(struct f2fs_sb_info *sbi, struct page *page)
+bool f2fs_node_chksum_verify(struct f2fs_sb_info *sbi, struct page *page)
 {
-	struct f2fs_inode *ri;
+	struct f2fs_node *rn;
 	__u32 provided, calculated;
 
 	if (unlikely(is_sbi_flag_set(sbi, SBI_IS_SHUTDOWN)))
 		return true;
 
 #ifdef CONFIG_F2FS_CHECK_FS
-	if (!f2fs_enable_inode_chksum(sbi, page))
+	if (!f2fs_enable_node_chksum(sbi, page))
 #else
-	if (!f2fs_enable_inode_chksum(sbi, page) ||
+	if (!f2fs_enable_node_chksum(sbi, page) ||
 			PageDirty(page) || PageWriteback(page))
 #endif
 		return true;
 
-	ri = &F2FS_NODE(page)->i;
-	provided = le32_to_cpu(ri->i_inode_checksum);
-	calculated = f2fs_inode_chksum(sbi, page);
+	rn = F2FS_NODE(page);
+	if (RAW_IS_INODE(rn))
+		provided = le32_to_cpu(rn->i.i_inode_checksum);
+	else
+		provided = le32_to_cpu(rn->node_checksum);
+	calculated = f2fs_node_chksum(sbi, page);
 
 	if (provided != calculated)
-		f2fs_warn(sbi, "checksum invalid, nid = %lu, ino_of_node = %x, %x vs. %x",
-			  page->index, ino_of_node(page), provided, calculated);
+		f2fs_warn(sbi, "checksum invalid, ino = %u, nid = %u, %x vs. %x",
+			ino_of_node(page), nid_of_node(page),
+			provided, calculated);
 
 	return provided == calculated;
 }
 
-void f2fs_inode_chksum_set(struct f2fs_sb_info *sbi, struct page *page)
+void f2fs_node_chksum_set(struct f2fs_sb_info *sbi, struct page *page)
 {
-	struct f2fs_inode *ri = &F2FS_NODE(page)->i;
+	struct f2fs_node *rn = F2FS_NODE(page);
+	__le32 chksum;
 
-	if (!f2fs_enable_inode_chksum(sbi, page))
+	if (!f2fs_enable_node_chksum(sbi, page))
 		return;
 
-	ri->i_inode_checksum = cpu_to_le32(f2fs_inode_chksum(sbi, page));
+	chksum = cpu_to_le32(f2fs_node_chksum(sbi, page));
+
+	if (RAW_IS_INODE(rn))
+		rn->i.i_inode_checksum = chksum;
+	else
+		rn->node_checksum = chksum;
 }
 
 static bool sanity_check_inode(struct inode *inode, struct page *node_page)
@@ -639,7 +661,7 @@ void f2fs_update_inode(struct inode *inode, struct page *node_page)
 	F2FS_I(inode)->i_disk_time[3] = F2FS_I(inode)->i_crtime;
 
 #ifdef CONFIG_F2FS_CHECK_FS
-	f2fs_inode_chksum_set(F2FS_I_SB(inode), node_page);
+	f2fs_node_chksum_set(F2FS_I_SB(inode), node_page);
 #endif
 }
 

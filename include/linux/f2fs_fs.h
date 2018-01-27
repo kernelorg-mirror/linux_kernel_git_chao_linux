@@ -317,8 +317,14 @@ struct f2fs_node {
 	/* can be one of three types: inode, direct, and indirect types */
 	union {
 		struct f2fs_inode i;
-		struct direct_node dn;
-		struct indirect_node in;
+		union {
+			struct {
+				__le32 data[1017];
+				__le32 node_checksum;
+			};
+			struct direct_node dn;
+			struct indirect_node in;
+		};
 	};
 	struct node_footer footer;
 } __packed;

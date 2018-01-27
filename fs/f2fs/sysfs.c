@@ -153,6 +153,9 @@ static ssize_t features_show(struct f2fs_attr *a,
 	if (f2fs_sb_has_extended_node(sbi))
 		len += scnprintf(buf + len, PAGE_SIZE - len, "%s%s",
 				len ? ", " : "", "extended_node");
+	if (f2fs_sb_has_node_checksum(sbi))
+		len += scnprintf(buf + len, PAGE_SIZE - len, "%s%s",
+				len ? ", " : "", "node_checksum");
 	len += scnprintf(buf + len, PAGE_SIZE - len, "\n");
 	return len;
 }
@@ -476,6 +479,7 @@ enum feat_id {
 	FEAT_COMPRESSION,
 	FEAT_TEST_DUMMY_ENCRYPTION_V2,
 	FEAT_EXTENDED_NODE,
+	FEAT_NODE_CHECKSUM,
 };
 
 static ssize_t f2fs_feature_show(struct f2fs_attr *a,
@@ -498,6 +502,7 @@ static ssize_t f2fs_feature_show(struct f2fs_attr *a,
 	case FEAT_COMPRESSION:
 	case FEAT_TEST_DUMMY_ENCRYPTION_V2:
 	case FEAT_EXTENDED_NODE:
+	case FEAT_NODE_CHECKSUM:
 		return sprintf(buf, "supported\n");
 	}
 	return 0;
@@ -620,6 +625,7 @@ F2FS_FEATURE_RO_ATTR(casefold, FEAT_CASEFOLD);
 F2FS_FEATURE_RO_ATTR(compression, FEAT_COMPRESSION);
 #endif
 F2FS_FEATURE_RO_ATTR(extended_node, FEAT_EXTENDED_NODE);
+F2FS_FEATURE_RO_ATTR(node_checksum, FEAT_NODE_CHECKSUM);
 
 #define ATTR_LIST(name) (&f2fs_attr_##name.attr)
 static struct attribute *f2fs_attrs[] = {
@@ -709,6 +715,7 @@ static struct attribute *f2fs_feat_attrs[] = {
 	ATTR_LIST(compression),
 #endif
 	ATTR_LIST(extended_node),
+	ATTR_LIST(node_checksum),
 	NULL,
 };
 ATTRIBUTE_GROUPS(f2fs_feat);

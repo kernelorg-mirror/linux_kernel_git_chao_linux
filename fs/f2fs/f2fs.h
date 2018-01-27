@@ -167,6 +167,7 @@ struct f2fs_mount_info {
 #define F2FS_FEATURE_CASEFOLD		0x1000
 #define F2FS_FEATURE_COMPRESSION	0x2000
 #define F2FS_FEATURE_EXTENDED_NODE	0x4000
+#define F2FS_FEATURE_NODE_CHECKSUM	0x8000
 
 #define __F2FS_HAS_FEATURE(raw_super, mask)				\
 	((raw_super->feature & cpu_to_le32(mask)) != 0)
@@ -3109,6 +3110,11 @@ static inline int get_inline_xattr_addrs(struct inode *inode)
 /* maximum period of iostat tracing is 1 day */
 #define MAX_IOSTAT_PERIOD_MS		8640000
 
+#define F2FS_FITS_IN_NODE(extra_nsize, field)		\
+		((offsetof(struct f2fs_node, footer) -	\
+		offsetof(struct f2fs_node, field))	\
+		<= (extra_nsize))			\
+
 static inline void f2fs_reset_iostat(struct f2fs_sb_info *sbi)
 {
 	int i;
@@ -3206,8 +3212,8 @@ int f2fs_pin_file_control(struct inode *inode, bool inc);
  * inode.c
  */
 void f2fs_set_inode_flags(struct inode *inode);
-bool f2fs_inode_chksum_verify(struct f2fs_sb_info *sbi, struct page *page);
-void f2fs_inode_chksum_set(struct f2fs_sb_info *sbi, struct page *page);
+bool f2fs_node_chksum_verify(struct f2fs_sb_info *sbi, struct page *page);
+void f2fs_node_chksum_set(struct f2fs_sb_info *sbi, struct page *page);
 struct inode *f2fs_iget(struct super_block *sb, unsigned long ino);
 struct inode *f2fs_iget_retry(struct super_block *sb, unsigned long ino);
 int f2fs_try_to_free_nats(struct f2fs_sb_info *sbi, int nr_shrink);
@@ -4025,6 +4031,7 @@ F2FS_FEATURE_FUNCS(sb_chksum, SB_CHKSUM);
 F2FS_FEATURE_FUNCS(casefold, CASEFOLD);
 F2FS_FEATURE_FUNCS(compression, COMPRESSION);
 F2FS_FEATURE_FUNCS(extended_node, EXTENDED_NODE);
+F2FS_FEATURE_FUNCS(node_checksum, NODE_CHECKSUM);
 
 #ifdef CONFIG_BLK_DEV_ZONED
 static inline bool f2fs_blkz_is_seq(struct f2fs_sb_info *sbi, int devi,

@@ -1288,7 +1288,7 @@ static int read_node_page(struct page *page, int op_flags)
 	int err;
 
 	if (PageUptodate(page)) {
-		if (!f2fs_inode_chksum_verify(sbi, page)) {
+		if (!f2fs_node_chksum_verify(sbi, page)) {
 			ClearPageUptodate(page);
 			return -EFSBADCRC;
 		}
@@ -1379,7 +1379,7 @@ repeat:
 		goto out_err;
 	}
 
-	if (!f2fs_inode_chksum_verify(sbi, page)) {
+	if (!f2fs_node_chksum_verify(sbi, page)) {
 		err = -EFSBADCRC;
 		goto out_err;
 	}
@@ -2083,7 +2083,7 @@ static int f2fs_set_node_page_dirty(struct page *page)
 		SetPageUptodate(page);
 #ifdef CONFIG_F2FS_CHECK_FS
 	if (IS_INODE(page))
-		f2fs_inode_chksum_set(F2FS_P_SB(page), page);
+		f2fs_node_chksum_set(F2FS_P_SB(page), page);
 #endif
 	if (!PageDirty(page)) {
 		__set_page_dirty_nobuffers(page);
