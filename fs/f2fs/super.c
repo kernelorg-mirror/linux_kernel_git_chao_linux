@@ -2596,10 +2596,12 @@ static const struct export_operations f2fs_export_ops = {
 	.get_parent = f2fs_get_parent,
 };
 
-static loff_t max_file_blocks(void)
+static loff_t max_file_blocks(struct super_block *sb)
 {
+	unsigned int nids_per_block = DEF_NIDS_PER_BLOCK -
+					get_extra_nsize(sb);
+	loff_t leaf_count = DEF_ADDRS_PER_BLOCK - get_extra_nsize(sb);
 	loff_t result = 0;
-	loff_t leaf_count = DEF_ADDRS_PER_BLOCK;
 
 	/*
 	 * note: previously, result is equal to (DEF_ADDRS_PER_INODE -
@@ -2612,11 +2614,11 @@ static loff_t max_file_blocks(void)
 	result += (leaf_count * 2);
 
 	/* two indirect node blocks */
-	leaf_count *= NIDS_PER_BLOCK;
+	leaf_count *= nids_per_block;
 	result += (leaf_count * 2);
 
 	/* one double indirect node block */
-	leaf_count *= NIDS_PER_BLOCK;
+	leaf_count *= nids_per_block;
 	result += leaf_count;
 
 	return result;
@@ -3498,6 +3500,10 @@ try_onemore:
 		goto free_sb_buf;
 	}
 #endif
+
+	if (f2fs_sb_has_extended_node(sbi))
+		sbi->extra_nsize = le16_to_cpu(raw_super->extra_nsize);
+
 	default_options(sbi);
 	/* parse mount options */
 	options = kstrdup((const char *)data, GFP_KERNEL);
@@ -3510,7 +3516,7 @@ try_onemore:
 	if (err)
 		goto free_options;
 
-	sbi->max_file_blocks = max_file_blocks();
+	sbi->max_file_blocks = max_file_blocks(sb);
 	sb->s_maxbytes = sbi->max_file_blocks <<
 				le32_to_cpu(raw_super->log_blocksize);
 	sb->s_max_links = F2FS_LINK_MAX;

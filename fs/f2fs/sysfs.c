@@ -150,6 +150,9 @@ static ssize_t features_show(struct f2fs_attr *a,
 				len ? ", " : "", "compression");
 	len += scnprintf(buf + len, PAGE_SIZE - len, "%s%s",
 				len ? ", " : "", "pin_file");
+	if (f2fs_sb_has_extended_node(sbi))
+		len += scnprintf(buf + len, PAGE_SIZE - len, "%s%s",
+				len ? ", " : "", "extended_node");
 	len += scnprintf(buf + len, PAGE_SIZE - len, "\n");
 	return len;
 }
@@ -472,6 +475,7 @@ enum feat_id {
 	FEAT_CASEFOLD,
 	FEAT_COMPRESSION,
 	FEAT_TEST_DUMMY_ENCRYPTION_V2,
+	FEAT_EXTENDED_NODE,
 };
 
 static ssize_t f2fs_feature_show(struct f2fs_attr *a,
@@ -493,6 +497,7 @@ static ssize_t f2fs_feature_show(struct f2fs_attr *a,
 	case FEAT_CASEFOLD:
 	case FEAT_COMPRESSION:
 	case FEAT_TEST_DUMMY_ENCRYPTION_V2:
+	case FEAT_EXTENDED_NODE:
 		return sprintf(buf, "supported\n");
 	}
 	return 0;
@@ -614,6 +619,7 @@ F2FS_FEATURE_RO_ATTR(casefold, FEAT_CASEFOLD);
 #ifdef CONFIG_F2FS_FS_COMPRESSION
 F2FS_FEATURE_RO_ATTR(compression, FEAT_COMPRESSION);
 #endif
+F2FS_FEATURE_RO_ATTR(extended_node, FEAT_EXTENDED_NODE);
 
 #define ATTR_LIST(name) (&f2fs_attr_##name.attr)
 static struct attribute *f2fs_attrs[] = {
@@ -702,6 +708,7 @@ static struct attribute *f2fs_feat_attrs[] = {
 #ifdef CONFIG_F2FS_FS_COMPRESSION
 	ATTR_LIST(compression),
 #endif
+	ATTR_LIST(extended_node),
 	NULL,
 };
 ATTRIBUTE_GROUPS(f2fs_feat);

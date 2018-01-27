@@ -344,17 +344,20 @@ static inline bool is_recoverable_dnode(struct page *page)
  */
 static inline bool IS_DNODE(struct page *node_page)
 {
+	struct f2fs_sb_info *sbi = F2FS_P_SB(node_page);
 	unsigned int ofs = ofs_of_node(node_page);
+	unsigned int nids_per_block = DEF_NIDS_PER_BLOCK -
+					get_extra_nsize(sbi->sb);
 
 	if (f2fs_has_xattr_block(ofs))
 		return true;
 
-	if (ofs == 3 || ofs == 4 + NIDS_PER_BLOCK ||
-			ofs == 5 + 2 * NIDS_PER_BLOCK)
+	if (ofs == 3 || ofs == 4 + nids_per_block ||
+			ofs == 5 + 2 * nids_per_block)
 		return false;
-	if (ofs >= 6 + 2 * NIDS_PER_BLOCK) {
-		ofs -= 6 + 2 * NIDS_PER_BLOCK;
-		if (!((long int)ofs % (NIDS_PER_BLOCK + 1)))
+	if (ofs >= 6 + 2 * nids_per_block) {
+		ofs -= 6 + 2 * nids_per_block;
+		if (!((long int)ofs % (nids_per_block + 1)))
 			return false;
 	}
 	return true;

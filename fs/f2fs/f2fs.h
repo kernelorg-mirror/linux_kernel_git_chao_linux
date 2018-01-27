@@ -166,6 +166,7 @@ struct f2fs_mount_info {
 #define F2FS_FEATURE_SB_CHKSUM		0x0800
 #define F2FS_FEATURE_CASEFOLD		0x1000
 #define F2FS_FEATURE_COMPRESSION	0x2000
+#define F2FS_FEATURE_EXTENDED_NODE	0x4000
 
 #define __F2FS_HAS_FEATURE(raw_super, mask)				\
 	((raw_super->feature & cpu_to_le32(mask)) != 0)
@@ -484,6 +485,7 @@ struct f2fs_sectrim_range {
 /* for inline stuff */
 #define DEF_INLINE_RESERVED_SIZE	1
 static inline int get_extra_isize(struct inode *inode);
+static inline int get_extra_nsize(struct super_block *sb);
 static inline int get_inline_xattr_addrs(struct inode *inode);
 #define MAX_INLINE_DATA(inode)	(sizeof(__le32) *			\
 				(CUR_ADDRS_PER_INODE(inode) -		\
@@ -1507,6 +1509,7 @@ struct f2fs_sb_info {
 	loff_t max_file_blocks;			/* max block index of file */
 	int dir_level;				/* directory level */
 	int readdir_ra;				/* readahead inode in readdir */
+	unsigned int extra_nsize;		/* extra attr size in {d,id,did,x}node */
 
 	block_t user_block_count;		/* # of user blocks */
 	block_t total_valid_block_count;	/* # of valid blocks */
@@ -2852,6 +2855,16 @@ static inline unsigned int addrs_per_block(struct inode *inode)
 	return ALIGN_DOWN(DEF_ADDRS_PER_BLOCK, F2FS_I(inode)->i_cluster_size);
 }
 
+static inline unsigned int addrs_per_dnode(struct inode *inode)
+{
+	return DEF_ADDRS_PER_BLOCK - get_extra_nsize(inode->i_sb);
+}
+
+static inline unsigned int nids_per_idnode(struct inode *inode)
+{
+	return DEF_NIDS_PER_BLOCK - get_extra_nsize(inode->i_sb);
+}
+
 static inline void *inline_xattr_addr(struct inode *inode, struct page *page)
 {
 	struct f2fs_inode *ri = F2FS_INODE(page);
@@ -3065,6 +3078,11 @@ static inline void *f2fs_kvzalloc(struct f2fs_sb_info *sbi,
 static inline int get_extra_isize(struct inode *inode)
 {
 	return F2FS_I(inode)->i_extra_isize / sizeof(__le32);
+}
+
+static inline int get_extra_nsize(struct super_block *sb)
+{
+	return F2FS_SB(sb)->extra_nsize / sizeof(__le32);
 }
 
 static inline int get_inline_xattr_addrs(struct inode *inode)
@@ -4006,6 +4024,7 @@ F2FS_FEATURE_FUNCS(verity, VERITY);
 F2FS_FEATURE_FUNCS(sb_chksum, SB_CHKSUM);
 F2FS_FEATURE_FUNCS(casefold, CASEFOLD);
 F2FS_FEATURE_FUNCS(compression, COMPRESSION);
+F2FS_FEATURE_FUNCS(extended_node, EXTENDED_NODE);
 
 #ifdef CONFIG_BLK_DEV_ZONED
 static inline bool f2fs_blkz_is_seq(struct f2fs_sb_info *sbi, int devi,
