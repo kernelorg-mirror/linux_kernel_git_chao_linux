@@ -260,6 +260,8 @@ compress_extension=%s  Support adding specified extension, so that f2fs can enab
                        For other files, we can still enable compression via ioctl.
                        Note that, there is one reserved special extension '*', it
                        can be set to enable compression for all files.
+atgc                   Enable age-threshold garbage collection, it provides high
+                       effectiveness and efficiency on background GC.
 ====================== ============================================================
 
 Debugfs Entries
