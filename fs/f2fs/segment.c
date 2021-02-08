@@ -3422,7 +3422,7 @@ static void update_device_state(struct f2fs_io_info *fio)
 	}
 }
 
-static void do_write_page(struct f2fs_summary *sum, struct f2fs_io_info *fio)
+static void do_write_page(struct f2fs_summary *sum, struct f2fs_io_info *fio, int do_copy)
 {
 	int type = __get_segment_type(fio);
 	bool keep_order = (f2fs_lfs_mode(fio->sbi) && type == CURSEG_COLD_DATA);
@@ -3437,7 +3437,7 @@ reallocate:
 					fio->old_blkaddr, fio->old_blkaddr);
 
 	/* writeout dirty page into bdev */
-	f2fs_submit_page_write(fio);
+	f2fs_submit_page_write(fio, do_copy);
 	if (fio->retry) {
 		fio->old_blkaddr = fio->new_blkaddr;
 		goto reallocate;
@@ -3470,18 +3470,18 @@ void f2fs_do_write_meta_page(struct f2fs_sb_info *sbi, struct page *page,
 
 	set_page_writeback(page);
 	ClearPageError(page);
-	f2fs_submit_page_write(&fio);
+	f2fs_submit_page_write(&fio, 0);
 
 	stat_inc_meta_count(sbi, page->index);
 	f2fs_update_iostat(sbi, io_type, F2FS_BLKSIZE);
 }
 
-void f2fs_do_write_node_page(unsigned int nid, struct f2fs_io_info *fio)
+void f2fs_do_write_node_page(unsigned int nid, struct f2fs_io_info *fio, int do_copy)
 {
 	struct f2fs_summary sum;
 
 	set_summary(&sum, nid, 0, 0);
-	do_write_page(&sum, fio);
+	do_write_page(&sum, fio, do_copy);
 
 	f2fs_update_iostat(fio->sbi, fio->io_type, F2FS_BLKSIZE);
 }
@@ -3494,7 +3494,7 @@ void f2fs_outplace_write_data(struct dnode_of_data *dn,
 
 	f2fs_bug_on(sbi, dn->data_blkaddr == NULL_ADDR);
 	set_summary(&sum, dn->nid, dn->ofs_in_node, fio->version);
-	do_write_page(&sum, fio);
+	do_write_page(&sum, fio, 0);
 	f2fs_update_data_blkaddr(dn, fio->new_blkaddr);
 
 	f2fs_update_iostat(sbi, fio->io_type, F2FS_BLKSIZE);

@@ -942,7 +942,7 @@ alloc_new:
 	return 0;
 }
 
-void f2fs_submit_page_write(struct f2fs_io_info *fio)
+void f2fs_submit_page_write(struct f2fs_io_info *fio, int do_copy)
 {
 	struct f2fs_sb_info *sbi = fio->sbi;
 	enum page_type btype = PAGE_TYPE_OF_BIO(fio->type);

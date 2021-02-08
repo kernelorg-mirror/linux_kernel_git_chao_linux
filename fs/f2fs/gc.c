@@ -919,7 +919,7 @@ next_step:
 			continue;
 		}
 
-		err = f2fs_move_node_page(node_page, gc_type);
+		err = f2fs_move_node_page(node_page, gc_type, 0);
 		if (!err && gc_type == FG_GC)
 			submitted++;
 		stat_inc_node_blk_count(sbi, 1, gc_type);
@@ -1239,7 +1239,7 @@ static int move_data_block(struct inode *inode, block_t bidx,
 	fio.op = REQ_OP_WRITE;
 	fio.op_flags = REQ_SYNC;
 	fio.new_blkaddr = newaddr;
-	f2fs_submit_page_write(&fio);
+	f2fs_submit_page_write(&fio, 0);
 	if (fio.retry) {
 		err = -EAGAIN;
 		if (PageWriteback(fio.encrypted_page))

@@ -1505,7 +1505,7 @@ continue_unlock:
 
 static int __write_node_page(struct page *page, bool atomic, bool *submitted,
 				struct writeback_control *wbc, bool do_balance,
-				enum iostat_type io_type, unsigned int *seq_id)
+				enum iostat_type io_type, unsigned int *seq_id, int do_copy)
 {
 	struct f2fs_sb_info *sbi = F2FS_P_SB(page);
 	nid_t nid;
@@ -1588,7 +1588,7 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
 	ClearPageError(page);
 
 	fio.old_blkaddr = ni.blk_addr;
-	f2fs_do_write_node_page(nid, &fio);
+	f2fs_do_write_node_page(nid, &fio, do_copy);
 	set_node_addr(sbi, &ni, fio.new_blkaddr, is_fsync_dnode(page));
 	dec_page_count(sbi, F2FS_DIRTY_NODES);
 	up_read(&sbi->node_write);
@@ -1616,7 +1616,7 @@ redirty_out:
 	return AOP_WRITEPAGE_ACTIVATE;
 }
 
-int f2fs_move_node_page(struct page *node_page, int gc_type)
+int f2fs_move_node_page(struct page *node_page, int gc_type, int do_copy)
 {
 	int err = 0;
 
@@ -1637,7 +1637,7 @@ int f2fs_move_node_page(struct page *node_page, int gc_type)
 		}
 
 		if (__write_node_page(node_page, false, NULL,
-					&wbc, false, FS_GC_NODE_IO, NULL)) {
+					&wbc, false, FS_GC_NODE_IO, NULL, do_copy)) {
 			err = -EAGAIN;
 			unlock_page(node_page);
 		}
@@ -1658,7 +1658,7 @@ static int f2fs_write_node_page(struct page *page,
 				struct writeback_control *wbc)
 {
 	return __write_node_page(page, false, NULL, wbc, false,
-						FS_NODE_IO, NULL);
+						FS_NODE_IO, NULL, 0);
 }
 
 int f2fs_fsync_node_pages(struct f2fs_sb_info *sbi, struct inode *inode,
@@ -1743,7 +1743,7 @@ continue_unlock:
 			ret = __write_node_page(page, atomic &&
 						page == last_page,
 						&submitted, wbc, true,
-						FS_NODE_IO, seq_id);
+						FS_NODE_IO, seq_id, 0);
 			if (ret) {
 				unlock_page(page);
 				f2fs_put_page(last_page, 0);
@@ -1956,7 +1956,7 @@ write_node:
 			set_dentry_mark(page, 0);
 
 			ret = __write_node_page(page, false, &submitted,
-						wbc, do_balance, io_type, NULL);
+						wbc, do_balance, io_type, NULL, 0);
 			if (ret)
 				unlock_page(page);
 			else if (submitted)
