@@ -1523,6 +1523,7 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
 		.io_wbc = wbc,
 	};
 	unsigned int seq;
+	int ret = 0;
 
 	trace_f2fs_writepage(page, NODE);
 
@@ -1588,7 +1589,7 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
 	ClearPageError(page);
 
 	fio.old_blkaddr = ni.blk_addr;
-	f2fs_do_write_node_page(nid, &fio, do_copy);
+	ret = f2fs_do_write_node_page(nid, &fio, do_copy);
 	set_node_addr(sbi, &ni, fio.new_blkaddr, is_fsync_dnode(page));
 	dec_page_count(sbi, F2FS_DIRTY_NODES);
 	up_read(&sbi->node_write);
@@ -1607,6 +1608,12 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
 	if (submitted)
 		*submitted = fio.submitted;
 
+	if (do_copy) {
+		if (f2fs_in_warm_node_list(sbi, page))
+			f2fs_del_fsync_node_entry(sbi, page);
+		clear_cold_data(page);
+	}
+
 	if (do_balance)
 		f2fs_balance_fs(sbi, false);
 	return 0;
@@ -1620,7 +1627,7 @@ int f2fs_move_node_page(struct page *node_page, int gc_type, int do_copy)
 {
 	int err = 0;
 
-	if (gc_type == FG_GC) {
+	if (do_copy || (gc_type == FG_GC)) {
 		struct writeback_control wbc = {
 			.sync_mode = WB_SYNC_ALL,
 			.nr_to_write = 1,

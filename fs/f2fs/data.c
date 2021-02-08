@@ -571,6 +571,46 @@ static void __attach_io_flag(struct f2fs_io_info *fio)
 		fio->op_flags |= REQ_FUA;
 }
 
+/**
+ * __submit_copy_bio - issue BLK_COPY,
+ * BLK_COPY copies fio->old_blkaddr to fio->new_blkaddr
+ */
+
+static int __submit_copy_bio(struct f2fs_io_info *fio)
+{
+	struct f2fs_sb_info *sbi = fio->sbi;
+	struct block_device *bdev = f2fs_target_device(fio->sbi, fio->old_blkaddr, NULL);
+	struct block_device *bdev2 = f2fs_target_device(fio->sbi, fio->new_blkaddr, NULL);
+	int ret = 0, i;
+	struct range_entry rlist;
+
+	if (bdev != bdev2)
+		return -EAGAIN;
+
+	/*TODO: temp error checks, need to figure out for different devices how to handle */
+	if (!fio->old_blkaddr) {
+		printk("%s:%s:%d: old_blkaddr NULL \n", __FILE__, __func__, __LINE__);
+		 BUG();
+	} else if (!fio->new_blkaddr) {
+		printk("%s:%s:%d: new_blkaddr NULL \n", __FILE__, __func__, __LINE__);
+		BUG();
+	} else if (!f2fs_target_device_index(fio->sbi, fio->old_blkaddr)) {
+		printk("%s:%s:%d: old_blkaddr device is CNS\n", __FILE__, __func__, __LINE__);
+		BUG();
+	} else if (!f2fs_target_device_index(fio->sbi, fio->new_blkaddr)) {
+		printk("%s:%s:%d: new_blkaddr device is CNS\n", __FILE__, __func__, __LINE__);
+		BUG();
+	}
+
+	i = f2fs_target_device_index(fio->sbi, fio->old_blkaddr);
+
+	rlist.src = (fio->old_blkaddr - FDEV(i).start_blk) << 12;
+	rlist.len = PAGE_SIZE;
+	ret = blkdev_issue_copy(bdev, 1, &rlist, bdev, (fio->new_blkaddr - FDEV(i).start_blk) << 12, 0);
+
+       return ret;
+}
+
 static void __submit_merged_bio(struct f2fs_bio_info *io)
 {
 	struct f2fs_io_info *fio = &io->fio;
@@ -942,12 +982,13 @@ alloc_new:
 	return 0;
 }
 
-void f2fs_submit_page_write(struct f2fs_io_info *fio, int do_copy)
+int f2fs_submit_page_write(struct f2fs_io_info *fio, int do_copy)
 {
 	struct f2fs_sb_info *sbi = fio->sbi;
 	enum page_type btype = PAGE_TYPE_OF_BIO(fio->type);
 	struct f2fs_bio_info *io = sbi->write_io[btype] + fio->temp;
 	struct page *bio_page;
+	int ret = 0;
 
 	f2fs_bug_on(sbi, is_read_io(fio->op));
 
@@ -979,47 +1020,63 @@ next:
 
 	inc_page_count(sbi, WB_DATA_TYPE(bio_page));
 
-	if (io->bio &&
-	    (!io_is_mergeable(sbi, io->bio, io, fio, io->last_block_in_bio,
-			      fio->new_blkaddr) ||
-	     !f2fs_crypt_mergeable_bio(io->bio, fio->page->mapping->host,
-				       bio_page->index, fio)))
-		__submit_merged_bio(io);
-alloc_new:
-	if (io->bio == NULL) {
-		if (F2FS_IO_ALIGNED(sbi) &&
-				(fio->type == DATA || fio->type == NODE) &&
-				fio->new_blkaddr & F2FS_IO_SIZE_MASK(sbi)) {
-			dec_page_count(sbi, WB_DATA_TYPE(bio_page));
-			fio->retry = true;
-			goto skip;
+	if (do_copy) {
+		if (io->bio)
+			__submit_merged_bio(io);
+
+		if (io->bio == NULL) {
+			if (F2FS_IO_ALIGNED(sbi) &&
+					(fio->type == DATA || fio->type == NODE) &&
+					fio->new_blkaddr & F2FS_IO_SIZE_MASK(sbi)) {
+						dec_page_count(sbi, WB_DATA_TYPE(bio_page));
+					}
 		}
-		io->bio = __bio_alloc(fio, BIO_MAX_PAGES);
-		f2fs_set_bio_crypt_ctx(io->bio, fio->page->mapping->host,
+		ret = __submit_copy_bio(fio);
+	} else {
+		if (io->bio &&
+		    (!io_is_mergeable(sbi, io->bio, io, fio, io->last_block_in_bio,
+				      fio->new_blkaddr) ||
+		     !f2fs_crypt_mergeable_bio(io->bio, fio->page->mapping->host,
+					       bio_page->index, fio)))
+			__submit_merged_bio(io);
+alloc_new:
+		if (io->bio == NULL) {
+			if (F2FS_IO_ALIGNED(sbi) &&
+					(fio->type == DATA || fio->type == NODE) &&
+					fio->new_blkaddr & F2FS_IO_SIZE_MASK(sbi)) {
+				dec_page_count(sbi, WB_DATA_TYPE(bio_page));
+				fio->retry = true;
+				goto skip;
+			}
+			io->bio = __bio_alloc(fio, BIO_MAX_PAGES);
+			f2fs_set_bio_crypt_ctx(io->bio, fio->page->mapping->host,
 				       bio_page->index, fio, GFP_NOIO);
-		io->fio = *fio;
-	}
+			io->fio = *fio;
+		}
 
-	if (bio_add_page(io->bio, bio_page, PAGE_SIZE, 0) < PAGE_SIZE) {
-		__submit_merged_bio(io);
-		goto alloc_new;
-	}
+		if (bio_add_page(io->bio, bio_page, PAGE_SIZE, 0) < PAGE_SIZE) {
+			__submit_merged_bio(io);
+			goto alloc_new;
+		}
 
-	if (fio->io_wbc)
-		wbc_account_cgroup_owner(fio->io_wbc, bio_page, PAGE_SIZE);
+		if (fio->io_wbc)
+			wbc_account_cgroup_owner(fio->io_wbc, bio_page, PAGE_SIZE);
 
-	io->last_block_in_bio = fio->new_blkaddr;
-	f2fs_trace_ios(fio, 0);
+		io->last_block_in_bio = fio->new_blkaddr;
+		f2fs_trace_ios(fio, 0);
 
-	trace_f2fs_submit_page_write(fio->page, fio);
+		trace_f2fs_submit_page_write(fio->page, fio);
 skip:
-	if (fio->in_list)
-		goto next;
+		if (fio->in_list)
+			goto next;
+	}
 out:
 	if (is_sbi_flag_set(sbi, SBI_IS_SHUTDOWN) ||
 				!f2fs_is_checkpoint_ready(sbi))
 		__submit_merged_bio(io);
 	up_write(&io->io_rwsem);
+
+	return ret;
 }
 
 static inline bool f2fs_need_verity(const struct inode *inode, pgoff_t idx)

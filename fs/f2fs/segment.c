@@ -3422,10 +3422,11 @@ static void update_device_state(struct f2fs_io_info *fio)
 	}
 }
 
-static void do_write_page(struct f2fs_summary *sum, struct f2fs_io_info *fio, int do_copy)
+static int do_write_page(struct f2fs_summary *sum, struct f2fs_io_info *fio, int do_copy)
 {
 	int type = __get_segment_type(fio);
 	bool keep_order = (f2fs_lfs_mode(fio->sbi) && type == CURSEG_COLD_DATA);
+	int ret = 0;
 
 	if (keep_order)
 		down_read(&fio->sbi->io_order_lock);
@@ -3447,6 +3448,8 @@ reallocate:
 
 	if (keep_order)
 		up_read(&fio->sbi->io_order_lock);
+
+	return ret;
 }
 
 void f2fs_do_write_meta_page(struct f2fs_sb_info *sbi, struct page *page,
@@ -3476,14 +3479,17 @@ void f2fs_do_write_meta_page(struct f2fs_sb_info *sbi, struct page *page,
 	f2fs_update_iostat(sbi, io_type, F2FS_BLKSIZE);
 }
 
-void f2fs_do_write_node_page(unsigned int nid, struct f2fs_io_info *fio, int do_copy)
+int f2fs_do_write_node_page(unsigned int nid, struct f2fs_io_info *fio, int do_copy)
 {
 	struct f2fs_summary sum;
+	int ret = 0;
 
 	set_summary(&sum, nid, 0, 0);
-	do_write_page(&sum, fio, do_copy);
+	ret = do_write_page(&sum, fio, do_copy);
 
 	f2fs_update_iostat(fio->sbi, fio->io_type, F2FS_BLKSIZE);
+
+	return ret;
 }
 
 void f2fs_outplace_write_data(struct dnode_of_data *dn,

@@ -919,7 +919,7 @@ next_step:
 			continue;
 		}
 
-		err = f2fs_move_node_page(node_page, gc_type, 0);
+		err = f2fs_move_node_page(node_page, gc_type, 1);
 		if (!err && gc_type == FG_GC)
 			submitted++;
 		stat_inc_node_blk_count(sbi, 1, gc_type);
