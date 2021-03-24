@@ -27,6 +27,9 @@
 #include <linux/part_stat.h>
 #include <linux/zstd.h>
 #include <linux/lz4.h>
+#ifdef CONFIG_FS_DAX
+#include <linux/dax.h>
+#endif
 
 #include "f2fs.h"
 #include "node.h"
@@ -1441,6 +1444,9 @@ static void f2fs_put_super(struct super_block *sb)
 		kvfree(sbi->write_io[i]);
 #ifdef CONFIG_UNICODE
 	utf8_unload(sb->s_encoding);
+#endif
+#ifdef CONFIG_FS_DAX
+	fs_put_dax(sbi->s_daxdev);
 #endif
 	kfree(sbi);
 }
@@ -3661,6 +3667,10 @@ try_onemore:
 
 	sbi->sb = sb;
 
+#ifdef CONFIG_FS_DAX
+	sbi->s_daxdev = fs_dax_get_by_bdev(sb->s_bdev);
+#endif
+
 	/* Load the checksum driver */
 	sbi->s_chksum_driver = crypto_alloc_shash("crc32", 0, 0);
 	if (IS_ERR(sbi->s_chksum_driver)) {
@@ -4121,6 +4131,9 @@ free_bio_info:
 #ifdef CONFIG_UNICODE
 	utf8_unload(sb->s_encoding);
 	sb->s_encoding = NULL;
+#endif
+#ifdef CONFIG_FS_DAX
+	fs_put_dax(sbi->s_daxdev);
 #endif
 free_options:
 #ifdef CONFIG_QUOTA

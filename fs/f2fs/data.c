@@ -21,6 +21,9 @@
 #include <linux/cleancache.h>
 #include <linux/sched/signal.h>
 #include <linux/fiemap.h>
+#ifdef CONFIG_FS_DAX
+#include <linux/iomap.h>
+#endif
 
 #include "f2fs.h"
 #include "node.h"
@@ -1518,12 +1521,25 @@ next_block:
 			blkaddr = dn.data_blkaddr;
 			set_inode_flag(inode, FI_APPEND_WRITE);
 		}
+
+		if (flag == F2FS_GET_BLOCK_ZERO &&
+					map->m_flags & F2FS_MAP_NEW)
+			goto sync_out;
 	} else {
 		if (create) {
 			if (unlikely(f2fs_cp_error(sbi))) {
 				err = -EIO;
 				goto sync_out;
 			}
+			/*
+			 * If newly allocated blocks are to be zeroed out later,
+			 * a single f2fs_map_blocks must not contain both old
+			 * and new blocks at the same time.
+			 */
+			if (flag == F2FS_GET_BLOCK_ZERO
+					&& (map->m_flags & F2FS_MAP_MAPPED)
+					&& !(map->m_flags & F2FS_MAP_NEW))
+				goto sync_out;
 			if (flag == F2FS_GET_BLOCK_PRE_AIO) {
 				if (blkaddr == NULL_ADDR) {
 					prealloc++;
@@ -1531,7 +1547,8 @@ next_block:
 				}
 			} else {
 				WARN_ON(flag != F2FS_GET_BLOCK_PRE_DIO &&
-					flag != F2FS_GET_BLOCK_DIO);
+					flag != F2FS_GET_BLOCK_DIO &&
+					flag != F2FS_GET_BLOCK_ZERO);
 				err = __allocate_data_block(&dn,
 							map->m_seg_type);
 				if (!err)
@@ -1646,6 +1663,16 @@ sync_out:
 		if (map->m_next_extent)
 			*map->m_next_extent = pgofs + 1;
 	}
+
+	if (flag == F2FS_GET_BLOCK_ZERO && map->m_flags & F2FS_MAP_NEW) {
+		if (IS_ENCRYPTED(inode) && S_ISREG(inode->i_mode))
+			return fscrypt_zeroout_range(inode, map->m_lblk,
+					map->m_pblk, map->m_len);
+
+		err = sb_issue_zeroout(inode->i_sb, map->m_pblk,
+				map->m_len, GFP_NOFS);
+	}
+
 	f2fs_put_dnode(&dn);
 unlock_out:
 	if (map->m_may_create) {
@@ -3153,7 +3180,8 @@ static int f2fs_write_data_pages(struct address_space *mapping,
 			FS_CP_DATA_IO : FS_DATA_IO);
 }
 
-static void f2fs_write_failed(struct address_space *mapping, loff_t to)
+static void f2fs_write_failed(struct address_space *mapping, loff_t to,
+								bool lock)
 {
 	struct inode *inode = mapping->host;
 	loff_t i_size = i_size_read(inode);
@@ -3163,14 +3191,18 @@ static void f2fs_write_failed(struct address_space *mapping, loff_t to)
 
 	/* In the fs-verity case, f2fs_end_enable_verity() does the truncate */
 	if (to > i_size && !f2fs_verity_in_progress(inode)) {
-		down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
-		down_write(&F2FS_I(inode)->i_mmap_sem);
+		if (lock) {
+			down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+			down_write(&F2FS_I(inode)->i_mmap_sem);
+		}
 
 		truncate_pagecache(inode, i_size);
 		f2fs_truncate_blocks(inode, i_size, true);
 
-		up_write(&F2FS_I(inode)->i_mmap_sem);
-		up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+		if (lock) {
+			up_write(&F2FS_I(inode)->i_mmap_sem);
+			up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+		}
 	}
 }
 
@@ -3387,7 +3419,7 @@ repeat:
 
 fail:
 	f2fs_put_page(page, 1);
-	f2fs_write_failed(mapping, pos + len);
+	f2fs_write_failed(mapping, pos + len, true);
 	if (drop_atomic)
 		f2fs_drop_inmem_pages_all(sbi, false);
 	return err;
@@ -3577,7 +3609,7 @@ static ssize_t f2fs_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 			f2fs_update_iostat(F2FS_I_SB(inode), APP_DIRECT_IO,
 						count - iov_iter_count(iter));
 		} else if (err < 0) {
-			f2fs_write_failed(mapping, offset + count);
+			f2fs_write_failed(mapping, offset + count, true);
 		}
 	} else {
 		if (err > 0)
@@ -4082,6 +4114,93 @@ static int f2fs_swap_activate(struct swap_info_struct *sis, struct file *file,
 static void f2fs_swap_deactivate(struct file *file)
 {
 }
+#endif
+
+#ifdef CONFIG_FS_DAX
+static void f2fs_set_iomap(struct inode *inode, struct iomap *iomap,
+				struct f2fs_map_blocks *map, loff_t offset,
+				loff_t length)
+{
+	if (map->m_flags & F2FS_MAP_NEW)
+		iomap->flags |= IOMAP_F_NEW;
+
+	iomap->bdev = inode->i_sb->s_bdev;
+	iomap->dax_dev = F2FS_I_SB(inode)->s_daxdev;
+	iomap->offset = blks_to_bytes(inode, map->m_lblk);
+	iomap->length = blks_to_bytes(inode, map->m_len);
+
+	if (map->m_flags & F2FS_MAP_UNWRITTEN) {
+		iomap->type = IOMAP_UNWRITTEN;
+		iomap->addr = blks_to_bytes(inode, map->m_pblk);
+	} else if (map->m_flags & F2FS_MAP_MAPPED) {
+		iomap->type = IOMAP_MAPPED;
+		iomap->addr = blks_to_bytes(inode, map->m_pblk);
+		iomap->flags |= IOMAP_F_MERGED;
+	} else {
+		iomap->type = IOMAP_HOLE;
+		iomap->addr = IOMAP_NULL_ADDR;
+		iomap->length = F2FS_BLKSIZE;
+	}
+}
+
+static int f2fs_iomap_begin(struct inode *inode, loff_t offset,
+			loff_t length, unsigned int flags, struct iomap *iomap,
+			struct iomap *srcmap)
+{
+	unsigned long first_block = bytes_to_blks(inode, offset);
+	unsigned long last_block = bytes_to_blks(inode, offset + length - 1);
+	struct f2fs_map_blocks map;
+	int ret;
+	bool may_create = flags & IOMAP_WRITE;
+
+	if (WARN_ON_ONCE(f2fs_has_inline_data(inode)))
+		return -ERANGE;
+
+	map.m_lblk = first_block;
+	map.m_len = last_block - first_block + 1;
+	map.m_next_pgofs = NULL;
+	map.m_next_extent = NULL;
+	map.m_seg_type = f2fs_rw_hint_to_seg_type(inode->i_write_hint);
+	map.m_may_create = may_create;
+
+	if (may_create)
+		ret = f2fs_map_blocks(inode, &map, 1, F2FS_GET_BLOCK_ZERO);
+	else
+		ret = f2fs_map_blocks(inode, &map, 0, F2FS_GET_BLOCK_FIEMAP);
+	if (ret)
+		return ret;
+
+	f2fs_set_iomap(inode, iomap, &map, offset, length);
+	return 0;
+}
+
+static int f2fs_iomap_end(struct inode *inode, loff_t offset, loff_t length,
+		ssize_t written, unsigned int flags, struct iomap *iomap)
+{
+	if (!(flags & IOMAP_WRITE) || (flags & IOMAP_FAULT))
+		return 0;
+
+	if (offset + written > i_size_read(inode))
+		f2fs_i_size_write(inode, offset + written);
+
+	if (iomap->offset + iomap->length >
+			ALIGN(i_size_read(inode), F2FS_BLKSIZE)) {
+		block_t written_blk = bytes_to_blks(inode, offset + written);
+		block_t end_blk = bytes_to_blks(inode, offset + length);
+
+		if (written_blk < end_blk)
+			f2fs_write_failed(inode->i_mapping, offset + length,
+									false);
+	}
+
+	f2fs_update_time(F2FS_I_SB(inode), REQ_TIME);
+	return 0;
+}
+
+struct iomap_ops f2fs_iomap_ops = {
+	.iomap_begin	= f2fs_iomap_begin,
+	.iomap_end	= f2fs_iomap_end,
+};
 #endif
 
 const struct address_space_operations f2fs_dblock_aops = {

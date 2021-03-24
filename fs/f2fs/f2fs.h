@@ -622,6 +622,7 @@ enum {
 	F2FS_GET_BLOCK_PRE_DIO,
 	F2FS_GET_BLOCK_PRE_AIO,
 	F2FS_GET_BLOCK_PRECACHE,
+	F2FS_GET_BLOCK_ZERO,
 };
 
 /*
@@ -1634,6 +1635,11 @@ struct f2fs_sb_info {
 	u64 compr_written_block;
 	u64 compr_saved_block;
 	u32 compr_new_inode;
+#endif
+
+#ifdef CONFIG_FS_DAX
+	/* For dax support */
+	struct dax_device *s_daxdev;
 #endif
 };
 
