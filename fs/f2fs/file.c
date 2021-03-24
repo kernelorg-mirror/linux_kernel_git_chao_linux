@@ -22,6 +22,10 @@
 #include <linux/file.h>
 #include <linux/nls.h>
 #include <linux/sched/signal.h>
+#ifdef CONFIG_FS_DAX
+#include <linux/dax.h>
+#include <linux/iomap.h>
+#endif
 
 #include "f2fs.h"
 #include "node.h"
@@ -172,6 +176,55 @@ static const struct vm_operations_struct f2fs_file_vm_ops = {
 	.map_pages	= filemap_map_pages,
 	.page_mkwrite	= f2fs_vm_page_mkwrite,
 };
+
+#ifdef CONFIG_FS_DAX
+extern struct iomap_ops f2fs_iomap_ops;
+static vm_fault_t f2fs_dax_huge_fault(struct vm_fault *vmf,
+					enum page_entry_size pe_size)
+{
+	struct inode *inode = file_inode(vmf->vma->vm_file);
+	struct f2fs_inode_info *fi = F2FS_I(inode);
+	struct super_block *sb = inode->i_sb;
+	bool write = (vmf->flags & FAULT_FLAG_WRITE) &&
+			(vmf->vma->vm_flags & VM_SHARED);
+	vm_fault_t result;
+	pfn_t pfn;
+
+	if (write) {
+		sb_start_pagefault(sb);
+		file_update_time(vmf->vma->vm_file);
+	}
+
+	down_write(&fi->i_gc_rwsem[WRITE]);
+	down_read(&fi->i_mmap_sem);
+
+	result = dax_iomap_fault(vmf, pe_size, &pfn, NULL, &f2fs_iomap_ops);
+	if (write && (result & VM_FAULT_NEEDDSYNC))
+		result = dax_finish_sync_fault(vmf, pe_size, pfn);
+
+	up_read(&fi->i_mmap_sem);
+	up_write(&fi->i_gc_rwsem[WRITE]);
+
+	if (write)
+		sb_end_pagefault(sb);
+
+	return result;
+}
+
+static vm_fault_t f2fs_dax_fault(struct vm_fault *vmf)
+{
+	return f2fs_dax_huge_fault(vmf, PE_SIZE_PTE);
+}
+
+static const struct vm_operations_struct f2fs_dax_vm_ops = {
+	.fault		= f2fs_dax_fault,
+	.huge_fault	= f2fs_dax_huge_fault,
+	.page_mkwrite	= f2fs_dax_fault,
+	.pfn_mkwrite	= f2fs_dax_fault,
+};
+#else
+#define f2fs_dax_vm_ops f2fs_file_vm_ops
+#endif
 
 static int get_parent_ino(struct inode *inode, nid_t *pino)
 {
@@ -518,7 +571,14 @@ static int f2fs_file_mmap(struct file *file, struct vm_area_struct *vma)
 		return -EOPNOTSUPP;
 
 	file_accessed(file);
-	vma->vm_ops = &f2fs_file_vm_ops;
+
+	if (IS_DAX(inode)) {
+		vma->vm_ops = &f2fs_dax_vm_ops;
+		vma->vm_flags |= VM_HUGEPAGE;
+	} else {
+		vma->vm_ops = &f2fs_file_vm_ops;
+	}
+
 	set_inode_flag(inode, FI_MMAP_FILE);
 	return 0;
 }
