@@ -28,6 +28,9 @@ bool f2fs_may_inline_data(struct inode *inode)
 	if (f2fs_post_read_required(inode))
 		return false;
 
+	if (IS_DAX(inode))
+		return false;
+
 	return true;
 }
 
