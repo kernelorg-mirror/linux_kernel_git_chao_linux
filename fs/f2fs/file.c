@@ -4338,6 +4338,57 @@ long f2fs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return __f2fs_ioctl(filp, cmd, arg);
 }
 
+#ifdef CONFIG_FS_DAX
+extern struct iomap_ops f2fs_iomap_ops;
+static ssize_t f2fs_dax_read_iter(struct kiocb *iocb, struct iov_iter *to)
+{
+	struct inode *inode = file_inode(iocb->ki_filp);
+	ssize_t ret;
+
+	if (iocb->ki_flags & IOCB_NOWAIT) {
+		if (!inode_trylock_shared(inode))
+			return -EAGAIN;
+	} else {
+		inode_lock_shared(inode);
+	}
+	/* Recheck dax flag under inode lock */
+	if (!IS_DAX(inode)) {
+		inode_unlock_shared(inode);
+		return generic_file_read_iter(iocb, to);
+	}
+	down_read(&F2FS_I(inode)->i_gc_rwsem[READ]);
+	down_read(&F2FS_I(inode)->i_mmap_sem);
+	ret = dax_iomap_rw(iocb, to, &f2fs_iomap_ops);
+	up_read(&F2FS_I(inode)->i_mmap_sem);
+	up_read(&F2FS_I(inode)->i_gc_rwsem[READ]);
+	inode_unlock_shared(inode);
+
+	file_accessed(iocb->ki_filp);
+	return ret;
+}
+
+static ssize_t f2fs_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+	struct inode *inode = file_inode(iocb->ki_filp);
+	ssize_t ret;
+
+	ret = file_remove_privs(iocb->ki_filp);
+	if (ret)
+		return ret;
+	ret = file_update_time(iocb->ki_filp);
+	if (ret)
+		return ret;
+
+	down_read(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+	down_read(&F2FS_I(inode)->i_mmap_sem);
+	ret = dax_iomap_rw(iocb, from, &f2fs_iomap_ops);
+	up_read(&F2FS_I(inode)->i_mmap_sem);
+	up_read(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+
+	return ret;
+}
+#endif
+
 static ssize_t f2fs_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
 	struct file *file = iocb->ki_filp;
@@ -4346,6 +4397,11 @@ static ssize_t f2fs_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 
 	if (!f2fs_is_compress_backend_ready(inode))
 		return -EOPNOTSUPP;
+
+#ifdef CONFIG_FS_DAX
+	if (IS_DAX(inode))
+		return f2fs_dax_read_iter(iocb, iter);
+#endif
 
 	ret = generic_file_read_iter(iocb, iter);
 
@@ -4390,6 +4446,13 @@ static ssize_t f2fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		bool preallocated = false;
 		size_t target_size = 0;
 		int err;
+
+#ifdef CONFIG_FS_DAX
+		if (IS_DAX(inode)) {
+			ret = f2fs_dax_write_iter(iocb, from);
+			goto unlock;
+		}
+#endif
 
 		if (iov_iter_fault_in_readable(from, iov_iter_count(from)))
 			set_inode_flag(inode, FI_NO_PREALLOC);
