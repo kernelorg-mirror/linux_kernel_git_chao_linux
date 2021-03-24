@@ -706,6 +706,12 @@ static int truncate_partial_data_page(struct inode *inode, u64 from,
 	if (!offset && !cache_only)
 		return 0;
 
+#ifdef CONFIG_FS_DAX
+	if (IS_DAX(inode))
+		return iomap_zero_range(inode, from, PAGE_SIZE - offset,
+						NULL, &f2fs_iomap_ops);
+#endif
+
 	if (cache_only) {
 		page = find_lock_page(mapping, index);
 		if (page && PageUptodate(page))
@@ -1086,6 +1092,21 @@ static int fill_zero(struct inode *inode, pgoff_t index,
 
 	f2fs_balance_fs(sbi, true);
 
+#ifdef CONFIG_FS_DAX
+	if (IS_DAX(inode)) {
+		int ret;
+
+		f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+		filemap_invalidate_lock(inode->i_mapping);
+		ret = iomap_zero_range(inode,
+			F2FS_BLK_TO_BYTES((loff_t)index) + start,
+			len, NULL, &f2fs_iomap_ops);
+		filemap_invalidate_unlock(inode->i_mapping);
+		f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+		return ret;
+	}
+#endif
+
 	f2fs_lock_op(sbi);
 	page = f2fs_get_new_data_page(inode, NULL, index, false);
 	f2fs_unlock_op(sbi);
@@ -1437,6 +1458,9 @@ static int f2fs_collapse_range(struct inode *inode, loff_t offset, loff_t len)
 	loff_t new_size;
 	int ret;
 
+	if (IS_DAX(inode))
+		return -EOPNOTSUPP;
+
 	if (offset + len >= i_size_read(inode))
 		return -EINVAL;
 
@@ -1458,6 +1482,7 @@ static int f2fs_collapse_range(struct inode *inode, loff_t offset, loff_t len)
 		return ret;
 
 	/* write out all moved pages, if possible */
+	f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 	filemap_invalidate_lock(inode->i_mapping);
 	filemap_write_and_wait_range(inode->i_mapping, offset, LLONG_MAX);
 	truncate_pagecache(inode, offset);
@@ -1465,6 +1490,7 @@ static int f2fs_collapse_range(struct inode *inode, loff_t offset, loff_t len)
 	new_size = i_size_read(inode) - len;
 	ret = f2fs_truncate_blocks(inode, new_size, true);
 	filemap_invalidate_unlock(inode->i_mapping);
+	f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 	if (!ret)
 		f2fs_i_size_write(inode, new_size);
 	return ret;
@@ -1636,6 +1662,9 @@ static int f2fs_insert_range(struct inode *inode, loff_t offset, loff_t len)
 	loff_t new_size;
 	int ret = 0;
 
+	if (IS_DAX(inode))
+		return -EOPNOTSUPP;
+
 	new_size = i_size_read(inode) + len;
 	ret = inode_newsize_ok(inode, new_size);
 	if (ret)
@@ -1654,9 +1683,11 @@ static int f2fs_insert_range(struct inode *inode, loff_t offset, loff_t len)
 
 	f2fs_balance_fs(sbi, true);
 
+	f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 	filemap_invalidate_lock(mapping);
 	ret = f2fs_truncate_blocks(inode, i_size_read(inode), true);
 	filemap_invalidate_unlock(mapping);
+	f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 	if (ret)
 		return ret;
 
@@ -2061,6 +2092,9 @@ static int f2fs_ioc_start_atomic_write(struct file *filp)
 	if (!inode_owner_or_capable(mnt_userns, inode))
 		return -EACCES;
 
+	if (IS_DAX(inode))
+		return -EOPNOTSUPP;
+
 	if (!S_ISREG(inode->i_mode))
 		return -EINVAL;
 
@@ -2144,6 +2178,9 @@ static int f2fs_ioc_commit_atomic_write(struct file *filp)
 	if (!inode_owner_or_capable(mnt_userns, inode))
 		return -EACCES;
 
+	if (IS_DAX(inode))
+		return -EOPNOTSUPP;
+
 	ret = mnt_want_write_file(filp);
 	if (ret)
 		return ret;
@@ -2177,6 +2214,9 @@ static int f2fs_ioc_abort_atomic_write(struct file *filp)
 
 	if (!inode_owner_or_capable(mnt_userns, inode))
 		return -EACCES;
+
+	if (IS_DAX(inode))
+		return -EOPNOTSUPP;
 
 	ret = mnt_want_write_file(filp);
 	if (ret)
@@ -2715,6 +2755,9 @@ static int f2fs_ioc_defragment(struct file *filp, unsigned long arg)
 	struct f2fs_defragment range;
 	int err;
 
+	if (IS_DAX(inode))
+		return -EOPNOTSUPP;
+
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
@@ -2763,6 +2806,9 @@ static int f2fs_move_file_range(struct file *file_in, loff_t pos_in,
 	size_t olen = len, dst_max_i_size = 0;
 	size_t dst_osize;
 	int ret;
+
+	if (IS_DAX(src) || IS_DAX(dst))
+		return -EOPNOTSUPP;
 
 	if (file_in->f_path.mnt != file_out->f_path.mnt ||
 				src->i_sb != dst->i_sb)
@@ -3275,6 +3321,12 @@ static int f2fs_ioc_enable_verity(struct file *filp, unsigned long arg)
 		f2fs_warn(F2FS_I_SB(inode),
 			  "Can't enable fs-verity on inode %lu: the verity feature is not enabled on this filesystem",
 			  inode->i_ino);
+		return -EOPNOTSUPP;
+	}
+
+	if (IS_DAX(inode)) {
+		f2fs_warn(F2FS_I_SB(inode), "Can't enable fs-verity on dax inode %lu: ",
+			inode->i_ino);
 		return -EOPNOTSUPP;
 	}
 

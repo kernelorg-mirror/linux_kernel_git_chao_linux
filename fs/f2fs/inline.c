@@ -22,6 +22,8 @@ static bool support_inline_data(struct inode *inode)
 		return false;
 	if (i_size_read(inode) > MAX_INLINE_DATA(inode))
 		return false;
+	if (IS_DAX(inode))
+		return false;
 	return true;
 }
 
