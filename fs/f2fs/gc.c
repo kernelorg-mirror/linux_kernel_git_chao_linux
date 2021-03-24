@@ -15,6 +15,8 @@
 #include <linux/sched/signal.h>
 #include <linux/random.h>
 #include <linux/sched/mm.h>
+#include <linux/iomap.h>
+#include <linux/dax.h>
 
 #include "f2fs.h"
 #include "node.h"
@@ -1451,6 +1453,124 @@ out:
 	return err;
 }
 
+#ifdef CONFIG_FS_DAX
+static int bdev_dax_pgoff(struct block_device *bdev, sector_t sector, size_t size,
+               pgoff_t *pgoff)
+{
+       sector_t start_sect = bdev ? get_start_sect(bdev) : 0;
+       phys_addr_t phys_off = (start_sect + sector) * 512;
+
+       if (pgoff)
+               *pgoff = PHYS_PFN(phys_off);
+       if (phys_off % PAGE_SIZE || size % PAGE_SIZE)
+               return -EINVAL;
+       return 0;
+}
+
+static int dax_move_data_page(struct inode *inode, block_t bidx,
+				int gc_type, unsigned int segno, int off)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+	struct block_device *bdev = inode->i_sb->s_bdev;
+	struct dax_device *dax_dev = sbi->s_daxdev;
+	struct dnode_of_data dn;
+	struct f2fs_summary sum;
+	struct node_info ni;
+	block_t old_blkaddr, new_blkaddr;
+	void *old_addr, *new_addr;
+	int err = 0, id;
+	long map_len;
+	pgoff_t pgoff;
+	pfn_t pfn;
+
+	f2fs_bug_on(sbi, f2fs_is_atomic_file(inode));
+
+	if (!check_valid_map(sbi, segno, off))
+		return -ENOENT;
+
+	if (!down_write_trylock(&inode->i_mapping->invalidate_lock))
+		return -EAGAIN;
+
+	unmap_mapping_range(inode->i_mapping, (loff_t)bidx << PAGE_SHIFT,
+							PAGE_SIZE, true);
+	/* find the old block address */
+	set_new_dnode(&dn, inode, NULL, NULL, 0);
+	err = f2fs_get_dnode_of_data(&dn, bidx, LOOKUP_NODE);
+	if (err)
+		goto out_up;
+
+	/* This page is already truncated */
+	if (unlikely(dn.data_blkaddr == NULL_ADDR)) {
+		err = -ENOENT;
+		goto out_put;
+	}
+
+	err = f2fs_get_node_info(sbi, dn.nid, &ni, false);
+	if (err)
+		goto out_put;
+
+	old_blkaddr = dn.data_blkaddr;
+	set_summary(&sum, dn.nid, dn.ofs_in_node, ni.version);
+
+	/* allocate a new block address */
+	f2fs_allocate_data_block(sbi, NULL, old_blkaddr, &new_blkaddr,
+					&sum, CURSEG_COLD_DATA, NULL);
+
+	/* copy data page from old to new address in dax_bdev */
+	id = dax_read_lock();
+
+	/* get virtual address of original page */
+	err = bdev_dax_pgoff(bdev, SECTOR_FROM_BLOCK(old_blkaddr),
+						PAGE_SIZE, &pgoff);
+	if (err)
+		goto out_recover;
+	map_len = dax_direct_access(dax_dev, pgoff, 1,
+				DAX_ACCESS, &old_addr, &pfn);
+	if (map_len < 0) {
+		err = map_len;
+		goto out_recover;
+	}
+
+	/* get virtual address of target page */
+	err = bdev_dax_pgoff(bdev, SECTOR_FROM_BLOCK(new_blkaddr),
+						PAGE_SIZE, &pgoff);
+	if (err)
+		goto out_recover;
+	map_len = dax_direct_access(dax_dev, pgoff, 1,
+				DAX_ACCESS, &new_addr, &pfn);
+	if (map_len < 0) {
+		err = map_len;
+		goto out_recover;
+	}
+
+	copy_page((void __force *)new_addr, (void __force *)old_addr);
+
+	f2fs_update_data_blkaddr(&dn, new_blkaddr);
+	set_inode_flag(inode, FI_APPEND_WRITE);
+	if (bidx == 0)
+		set_inode_flag(inode, FI_FIRST_BLOCK_WRITTEN);
+
+out_recover:
+	if (err)
+		f2fs_do_replace_block(sbi, &sum, new_blkaddr, old_blkaddr,
+							true, true, true);
+	dax_read_unlock(id);
+out_put:
+	f2fs_put_dnode(&dn);
+out_up:
+	unmap_mapping_range(inode->i_mapping, (loff_t)bidx << PAGE_SHIFT,
+							PAGE_SIZE, true);
+	filemap_invalidate_unlock(inode->i_mapping);
+	return err;
+}
+#else
+static int dax_move_data_page(struct inode *inode, block_t bidx,
+				int gc_type, unsigned int segno, int off)
+{
+	return 0;
+}
+#endif
+
 /*
  * This function tries to get parent node of victim data block, and identifies
  * data block validity. If the block is valid, copy that with cold status and
@@ -1532,6 +1652,11 @@ next_step:
 				return submitted;
 			}
 
+			if (IS_DAX(inode)) {
+				add_gc_inode(gc_list, inode);
+				continue;
+			}
+
 			if (!f2fs_down_write_trylock(
 				&F2FS_I(inode)->i_gc_rwsem[WRITE])) {
 				iput(inode);
@@ -1599,14 +1724,17 @@ move_data:
 #endif
 			start_bidx = f2fs_start_bidx_of_node(nofs, inode)
 								+ ofs_in_node;
-			if (f2fs_post_read_required(inode))
+			if (IS_DAX(inode))
+				err = dax_move_data_page(inode, start_bidx,
+							gc_type, segno, off);
+			else if (f2fs_post_read_required(inode))
 				err = move_data_block(inode, start_bidx,
 							gc_type, segno, off);
 			else
 				err = move_data_page(inode, start_bidx, gc_type,
 								segno, off);
 
-			if (!err && (gc_type == FG_GC ||
+			if (!err && (gc_type == FG_GC || IS_DAX(inode) ||
 					f2fs_post_read_required(inode)))
 				submitted++;
 
