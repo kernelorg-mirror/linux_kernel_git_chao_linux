@@ -1560,12 +1560,25 @@ next_block:
 			blkaddr = dn.data_blkaddr;
 			set_inode_flag(inode, FI_APPEND_WRITE);
 		}
+
+		if (flag == F2FS_GET_BLOCK_ZERO &&
+					(map->m_flags & F2FS_MAP_NEW))
+			goto sync_out;
 	} else {
 		if (create) {
 			if (unlikely(f2fs_cp_error(sbi))) {
 				err = -EIO;
 				goto sync_out;
 			}
+			/*
+			 * If newly allocated blocks are to be zeroed out later,
+			 * a single f2fs_map_blocks must not contain both old
+			 * and new blocks at the same time.
+			 */
+			if (flag == F2FS_GET_BLOCK_ZERO
+					&& (map->m_flags & F2FS_MAP_MAPPED)
+					&& !(map->m_flags & F2FS_MAP_NEW))
+				goto sync_out;
 			if (flag == F2FS_GET_BLOCK_PRE_AIO) {
 				if (blkaddr == NULL_ADDR) {
 					prealloc++;
@@ -1573,7 +1586,8 @@ next_block:
 				}
 			} else {
 				WARN_ON(flag != F2FS_GET_BLOCK_PRE_DIO &&
-					flag != F2FS_GET_BLOCK_DIO);
+					flag != F2FS_GET_BLOCK_DIO &&
+					flag != F2FS_GET_BLOCK_ZERO);
 				err = __allocate_data_block(&dn,
 							map->m_seg_type);
 				if (!err) {
@@ -1684,7 +1698,9 @@ skip:
 
 	if (map->m_may_create) {
 		f2fs_do_map_lock(sbi, flag, false);
-		f2fs_balance_fs(sbi, dn.node_changed);
+		/* skip f2fs_balance_fs for dax page fault */
+		if (flag != F2FS_GET_BLOCK_ZERO || !map->m_dax_fault)
+			f2fs_balance_fs(sbi, dn.node_changed);
 	}
 	goto next_dnode;
 
@@ -1726,11 +1742,23 @@ sync_out:
 		if (map->m_next_extent)
 			*map->m_next_extent = pgofs + 1;
 	}
+
+	if (flag == F2FS_GET_BLOCK_ZERO && (map->m_flags & F2FS_MAP_NEW)) {
+		if (IS_ENCRYPTED(inode) && S_ISREG(inode->i_mode))
+			err = fscrypt_zeroout_range(inode, map->m_lblk,
+					map->m_pblk, map->m_len);
+		else
+			err = sb_issue_zeroout(inode->i_sb, map->m_pblk,
+					map->m_len, GFP_NOFS);
+	}
+
 	f2fs_put_dnode(&dn);
 unlock_out:
 	if (map->m_may_create) {
 		f2fs_do_map_lock(sbi, flag, false);
-		f2fs_balance_fs(sbi, dn.node_changed);
+		/* skip f2fs_balance_fs for dax page fault */
+		if (flag != F2FS_GET_BLOCK_ZERO || !map->m_dax_fault)
+			f2fs_balance_fs(sbi, dn.node_changed);
 	}
 out:
 	trace_f2fs_map_blocks(inode, map, create, flag, err);
@@ -3254,7 +3282,7 @@ static int f2fs_write_data_pages(struct address_space *mapping,
 			FS_CP_DATA_IO : FS_DATA_IO);
 }
 
-void f2fs_write_failed(struct inode *inode, loff_t to)
+void f2fs_write_failed(struct inode *inode, loff_t to, bool lock)
 {
 	loff_t i_size = i_size_read(inode);
 
@@ -3263,14 +3291,16 @@ void f2fs_write_failed(struct inode *inode, loff_t to)
 
 	/* In the fs-verity case, f2fs_end_enable_verity() does the truncate */
 	if (to > i_size && !f2fs_verity_in_progress(inode)) {
-		f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+		if (lock)
+			f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 		filemap_invalidate_lock(inode->i_mapping);
 
 		truncate_pagecache(inode, i_size);
 		f2fs_truncate_blocks(inode, i_size, true);
 
 		filemap_invalidate_unlock(inode->i_mapping);
-		f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+		if (lock)
+			f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 	}
 }
 
@@ -3578,7 +3608,7 @@ repeat:
 
 fail:
 	f2fs_put_page(page, 1);
-	f2fs_write_failed(inode, pos + len);
+	f2fs_write_failed(inode, pos + len, true);
 	return err;
 }
 
@@ -4119,64 +4149,108 @@ void f2fs_destroy_bio_entry_cache(void)
 	kmem_cache_destroy(bio_entry_slab);
 }
 
-static int f2fs_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
-			    unsigned int flags, struct iomap *iomap,
-			    struct iomap *srcmap)
+static int f2fs_set_iomap(struct inode *inode, struct iomap *iomap,
+				struct f2fs_map_blocks *map, loff_t offset,
+				loff_t length)
 {
-	struct f2fs_map_blocks map = {};
-	pgoff_t next_pgofs = 0;
-	int err;
-
-	map.m_lblk = bytes_to_blks(inode, offset);
-	map.m_len = bytes_to_blks(inode, offset + length - 1) - map.m_lblk + 1;
-	map.m_next_pgofs = &next_pgofs;
-	map.m_seg_type = f2fs_rw_hint_to_seg_type(inode->i_write_hint);
-	if (flags & IOMAP_WRITE)
-		map.m_may_create = true;
-
-	err = f2fs_map_blocks(inode, &map, flags & IOMAP_WRITE,
-			      F2FS_GET_BLOCK_DIO);
-	if (err)
-		return err;
-
-	iomap->offset = blks_to_bytes(inode, map.m_lblk);
+	iomap->flags = 0;
+	iomap->dax_dev = F2FS_I_SB(inode)->s_daxdev;
+	iomap->offset = blks_to_bytes(inode, map->m_lblk);
 
 	/*
 	 * When inline encryption is enabled, sometimes I/O to an encrypted file
 	 * has to be broken up to guarantee DUN contiguity.  Handle this by
 	 * limiting the length of the mapping returned.
 	 */
-	map.m_len = fscrypt_limit_io_blocks(inode, map.m_lblk, map.m_len);
+	map->m_len = fscrypt_limit_io_blocks(inode, map->m_lblk, map->m_len);
 
-	if (map.m_flags & (F2FS_MAP_MAPPED | F2FS_MAP_UNWRITTEN)) {
-		iomap->length = blks_to_bytes(inode, map.m_len);
-		if (map.m_flags & F2FS_MAP_MAPPED) {
+	if (map->m_flags & (F2FS_MAP_MAPPED | F2FS_MAP_UNWRITTEN)) {
+		iomap->length = blks_to_bytes(inode, map->m_len);
+		if (map->m_flags & F2FS_MAP_MAPPED) {
 			iomap->type = IOMAP_MAPPED;
 			iomap->flags |= IOMAP_F_MERGED;
 		} else {
 			iomap->type = IOMAP_UNWRITTEN;
 		}
-		if (WARN_ON_ONCE(!__is_valid_data_blkaddr(map.m_pblk)))
-			return -EINVAL;
 
-		iomap->bdev = map.m_bdev;
-		iomap->addr = blks_to_bytes(inode, map.m_pblk);
+		if (WARN_ON_ONCE(!__is_valid_data_blkaddr(map->m_pblk)))
+			return -EINVAL;
+		iomap->bdev = map->m_bdev;
+		iomap->addr = blks_to_bytes(inode, map->m_pblk);
+
 	} else {
-		iomap->length = blks_to_bytes(inode, next_pgofs) -
+		iomap->length = blks_to_bytes(inode, *map->m_next_pgofs) -
 				iomap->offset;
 		iomap->type = IOMAP_HOLE;
 		iomap->addr = IOMAP_NULL_ADDR;
+		f2fs_bug_on(F2FS_I_SB(inode), !iomap->length);
 	}
 
-	if (map.m_flags & F2FS_MAP_NEW)
+	if (map->m_flags & F2FS_MAP_NEW)
 		iomap->flags |= IOMAP_F_NEW;
-	if ((inode->i_state & I_DIRTY_DATASYNC) ||
-	    offset + length > i_size_read(inode))
+	if (is_inode_flag_set(inode, FI_DIRTY_INODE) ||
+		offset + length > i_size_read(inode))
 		iomap->flags |= IOMAP_F_DIRTY;
 
 	return 0;
 }
 
+static int f2fs_iomap_begin(struct inode *inode, loff_t offset,
+			loff_t length, unsigned int flags, struct iomap *iomap,
+			struct iomap *srcmap)
+{
+	struct f2fs_map_blocks map;
+	pgoff_t next_pgofs = 0;
+	int err;
+	int flag;
+
+	if (WARN_ON_ONCE(f2fs_has_inline_data(inode)))
+		return -ERANGE;
+
+	map.m_lblk = bytes_to_blks(inode, offset);
+	map.m_len = bytes_to_blks(inode, offset + length - 1) - map.m_lblk + 1;
+	map.m_next_pgofs = &next_pgofs;
+	map.m_next_extent = NULL;
+	map.m_seg_type = f2fs_rw_hint_to_seg_type(inode->i_write_hint);
+	map.m_may_create = flags & IOMAP_WRITE;
+	map.m_dax_fault = flags & IOMAP_FAULT;
+
+	if (flags & IOMAP_DIRECT)
+		flag = F2FS_GET_BLOCK_PRE_DIO;
+	else
+		flag = map.m_may_create ?
+			F2FS_GET_BLOCK_ZERO : F2FS_GET_BLOCK_FIEMAP;
+
+	err = f2fs_map_blocks(inode, &map, map.m_may_create, flag);
+	if (err)
+		return err;
+
+	return f2fs_set_iomap(inode, iomap, &map, offset, length);
+}
+
+static int f2fs_iomap_end(struct inode *inode, loff_t offset, loff_t length,
+		ssize_t written, unsigned int flags, struct iomap *iomap)
+{
+	if (!(flags & IOMAP_WRITE) || (flags & IOMAP_FAULT))
+		return 0;
+
+	if (offset + written > i_size_read(inode))
+		f2fs_i_size_write(inode, offset + written);
+
+	if (iomap->offset + iomap->length >
+			ALIGN(i_size_read(inode), F2FS_BLKSIZE)) {
+		block_t written_blk = bytes_to_blks(inode, offset + written);
+		block_t end_blk = bytes_to_blks(inode, offset + length);
+
+		if (written_blk < end_blk)
+			f2fs_write_failed(inode, offset + length, false);
+	}
+
+	f2fs_update_time(F2FS_I_SB(inode), REQ_TIME);
+	return 0;
+}
+
 const struct iomap_ops f2fs_iomap_ops = {
 	.iomap_begin	= f2fs_iomap_begin,
+	.iomap_end	= f2fs_iomap_end,
 };

@@ -660,6 +660,7 @@ struct f2fs_map_blocks {
 	int m_seg_type;
 	bool m_may_create;		/* indicate it is from write path */
 	bool m_multidev_dio;		/* indicate it allows multi-device dio */
+	bool m_dax_fault;		/* indicate it is from dax page fault path */
 };
 
 /* for flag in get_data_block */
@@ -671,6 +672,7 @@ enum {
 	F2FS_GET_BLOCK_PRE_DIO,
 	F2FS_GET_BLOCK_PRE_AIO,
 	F2FS_GET_BLOCK_PRECACHE,
+	F2FS_GET_BLOCK_ZERO,
 };
 
 /*
@@ -1853,6 +1855,10 @@ struct f2fs_sb_info {
 	spinlock_t iostat_lat_lock;
 	struct iostat_lat_info *iostat_io_lat;
 #endif
+
+	/* For dax support */
+	struct dax_device *s_daxdev;
+	u64 s_dax_part_off;
 };
 
 #ifdef CONFIG_F2FS_FAULT_INJECTION
@@ -3798,7 +3804,7 @@ int f2fs_write_single_data_page(struct page *page, int *submitted,
 				struct writeback_control *wbc,
 				enum iostat_type io_type,
 				int compr_blocks, bool allow_balance);
-void f2fs_write_failed(struct inode *inode, loff_t to);
+void f2fs_write_failed(struct inode *inode, loff_t to, bool lock);
 void f2fs_invalidate_folio(struct folio *folio, size_t offset, size_t length);
 bool f2fs_release_folio(struct folio *folio, gfp_t wait);
 #ifdef CONFIG_MIGRATION

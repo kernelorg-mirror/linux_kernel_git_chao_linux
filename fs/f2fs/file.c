@@ -4531,7 +4531,7 @@ static ssize_t f2fs_dio_write_iter(struct kiocb *iocb, struct iov_iter *from,
 
 		ret2 = f2fs_buffered_write_iter(iocb, from);
 		if (iov_iter_count(from))
-			f2fs_write_failed(inode, iocb->ki_pos);
+			f2fs_write_failed(inode, iocb->ki_pos, true);
 		if (ret2 < 0)
 			goto out;
 
