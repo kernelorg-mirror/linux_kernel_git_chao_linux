@@ -333,6 +333,7 @@ static char *s_flag[] = {
 	[SBI_QUOTA_NEED_REPAIR]	= " quota_need_repair",
 	[SBI_IS_RESIZEFS]	= " resizefs",
 	[SBI_IS_FREEZING]	= " freezefs",
+	[SBI_SUPPORT_DAX]	= " dax"
 };
 
 static int stat_show(struct seq_file *s, void *v)

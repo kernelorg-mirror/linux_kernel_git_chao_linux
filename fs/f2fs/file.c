@@ -1934,6 +1934,69 @@ static int f2fs_file_flush(struct file *file, fl_owner_t id)
 	return 0;
 }
 
+static bool dax_mutually_exclusive(struct inode *inode)
+{
+	if (file_is_encrypt(inode))
+		return true;
+	if (file_is_verity(inode))
+		return true;
+	if (f2fs_has_inline_data(inode))
+		return true;
+	if (f2fs_compressed_file(inode))
+		return true;
+	return false;
+}
+
+static bool dax_compatible(struct inode *inode, unsigned int iflags)
+{
+	if (dax_mutually_exclusive(inode))
+		return false;
+	if (f2fs_verity_in_progress(inode))
+		return false;
+	return true;
+}
+
+bool f2fs_enable_dax_option(struct f2fs_sb_info *sbi)
+{
+	return F2FS_OPTION(sbi).dax_mode == DAX_MODE_ALWAYS ||
+		F2FS_OPTION(sbi).dax_mode == DAX_MODE_LAGECY;
+}
+
+bool f2fs_should_enable_dax(struct inode *inode)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+
+	if (F2FS_OPTION(sbi).dax_mode == DAX_MODE_NEVER)
+		return false;
+	if (!S_ISREG(inode->i_mode))
+		return false;
+	if (dax_mutually_exclusive(inode))
+		return false;
+	if (!is_sbi_flag_set(sbi, SBI_SUPPORT_DAX))
+		return false;
+	if (f2fs_enable_dax_option(sbi))
+		return true;
+
+	/* dax_mode == DAX_MODE_INODE, so follow status of F2FS_DAX_FL flag */
+	return F2FS_I(inode)->i_flags & F2FS_DAX_FL;
+}
+
+static void dax_dontcache(struct inode *inode, unsigned int oldflags,
+							unsigned int iflags)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+
+	if (S_ISDIR(inode->i_mode))
+		return;
+
+	if (F2FS_OPTION(sbi).dax_mode == DAX_MODE_ALWAYS ||
+		F2FS_OPTION(sbi).dax_mode == DAX_MODE_NEVER)
+		return;
+
+	if ((oldflags ^ iflags) & F2FS_DAX_FL)
+		d_mark_dontcache(inode);
+}
+
 static int f2fs_setflags_common(struct inode *inode, u32 iflags, u32 mask)
 {
 	struct f2fs_inode_info *fi = F2FS_I(inode);
@@ -1974,6 +2037,19 @@ static int f2fs_setflags_common(struct inode *inode, u32 iflags, u32 mask)
 		}
 	}
 
+	if (iflags & F2FS_DAX_FL) {
+		int err;
+
+		if (!dax_compatible(inode, iflags))
+			return -EOPNOTSUPP;
+
+		err = f2fs_convert_inline_inode(inode);
+		if (err)
+			return err;
+	}
+
+	dax_dontcache(inode, masked_flags, iflags);
+
 	fi->i_flags = iflags | (fi->i_flags & ~mask);
 	f2fs_bug_on(F2FS_I_SB(inode), (fi->i_flags & F2FS_COMPR_FL) &&
 					(fi->i_flags & F2FS_NOCOMP_FL));
@@ -1984,7 +2060,7 @@ static int f2fs_setflags_common(struct inode *inode, u32 iflags, u32 mask)
 		clear_inode_flag(inode, FI_PROJ_INHERIT);
 
 	inode->i_ctime = current_time(inode);
-	f2fs_set_inode_flags(inode);
+	f2fs_set_inode_flags(inode, false);
 	f2fs_mark_inode_dirty_sync(inode, true);
 	return 0;
 }
@@ -2016,6 +2092,7 @@ static const struct {
 	{ F2FS_DIRSYNC_FL,	FS_DIRSYNC_FL },
 	{ F2FS_PROJINHERIT_FL,	FS_PROJINHERIT_FL },
 	{ F2FS_CASEFOLD_FL,	FS_CASEFOLD_FL },
+	{ F2FS_DAX_FL,		FS_DAX_FL },
 };
 
 #define F2FS_GETTABLE_FS_FL (		\
@@ -2033,7 +2110,8 @@ static const struct {
 		FS_INLINE_DATA_FL |	\
 		FS_NOCOW_FL |		\
 		FS_VERITY_FL |		\
-		FS_CASEFOLD_FL)
+		FS_CASEFOLD_FL |	\
+		FS_DAX_FL)
 
 #define F2FS_SETTABLE_FS_FL (		\
 		FS_COMPR_FL |		\
@@ -2045,7 +2123,8 @@ static const struct {
 		FS_NOCOMP_FL |		\
 		FS_DIRSYNC_FL |		\
 		FS_PROJINHERIT_FL |	\
-		FS_CASEFOLD_FL)
+		FS_CASEFOLD_FL |	\
+		FS_DAX_FL)
 
 /* Convert f2fs on-disk i_flags to FS_IOC_{GET,SET}FLAGS flags */
 static inline u32 f2fs_iflags_to_fsflags(u32 iflags)
@@ -3523,6 +3602,7 @@ static int f2fs_release_compress_blocks(struct file *filp, unsigned long arg)
 		goto out;
 
 	set_inode_flag(inode, FI_COMPRESS_RELEASED);
+	f2fs_set_inode_flags(inode, false);
 	inode->i_ctime = current_time(inode);
 	f2fs_mark_inode_dirty_sync(inode, true);
 
@@ -3723,6 +3803,7 @@ static int f2fs_reserve_compress_blocks(struct file *filp, unsigned long arg)
 
 	if (ret >= 0) {
 		clear_inode_flag(inode, FI_COMPRESS_RELEASED);
+		f2fs_set_inode_flags(inode, false);
 		inode->i_ctime = current_time(inode);
 		f2fs_mark_inode_dirty_sync(inode, true);
 	}

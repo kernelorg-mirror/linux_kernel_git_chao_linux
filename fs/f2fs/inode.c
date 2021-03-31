@@ -33,10 +33,12 @@ void f2fs_mark_inode_dirty_sync(struct inode *inode, bool sync)
 	mark_inode_dirty_sync(inode);
 }
 
-void f2fs_set_inode_flags(struct inode *inode)
+void f2fs_set_inode_flags(struct inode *inode, bool init)
 {
 	unsigned int flags = F2FS_I(inode)->i_flags;
 	unsigned int new_fl = 0;
+
+	WARN_ON_ONCE(init && IS_DAX(inode));
 
 	if (flags & F2FS_SYNC_FL)
 		new_fl |= S_SYNC;
@@ -48,6 +50,10 @@ void f2fs_set_inode_flags(struct inode *inode)
 		new_fl |= S_NOATIME;
 	if (flags & F2FS_DIRSYNC_FL)
 		new_fl |= S_DIRSYNC;
+	if (IS_DAX(inode))
+		new_fl |= S_DAX;
+	if (init && f2fs_should_enable_dax(inode))
+		new_fl |= S_DAX;
 	if (file_is_encrypt(inode))
 		new_fl |= S_ENCRYPTED;
 	if (file_is_verity(inode))
@@ -56,7 +62,7 @@ void f2fs_set_inode_flags(struct inode *inode)
 		new_fl |= S_CASEFOLD;
 	inode_set_flags(inode, new_fl,
 			S_SYNC|S_APPEND|S_IMMUTABLE|S_NOATIME|S_DIRSYNC|
-			S_ENCRYPTED|S_VERITY|S_CASEFOLD);
+			S_ENCRYPTED|S_VERITY|S_CASEFOLD|S_DAX);
 }
 
 static void __get_inode_rdev(struct inode *inode, struct f2fs_inode *ri)
@@ -550,7 +556,7 @@ make_now:
 		ret = -EIO;
 		goto bad_inode;
 	}
-	f2fs_set_inode_flags(inode);
+	f2fs_set_inode_flags(inode, true);
 
 	if (file_should_truncate(inode) &&
 			!is_sbi_flag_set(sbi, SBI_POR_DOING)) {

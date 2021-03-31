@@ -122,14 +122,16 @@ static struct inode *f2fs_new_inode(struct user_namespace *mnt_userns,
 	}
 
 	/* Should enable inline_data after compression set */
-	if (test_opt(sbi, INLINE_DATA) && f2fs_may_inline_data(inode))
+	if (test_opt(sbi, INLINE_DATA) && f2fs_may_inline_data(inode) &&
+			!f2fs_enable_dax_option(sbi) &&
+			!(F2FS_I(dir)->i_flags & F2FS_DAX_FL))
 		set_inode_flag(inode, FI_INLINE_DATA);
 
 	stat_inc_inline_xattr(inode);
 	stat_inc_inline_inode(inode);
 	stat_inc_inline_dir(inode);
 
-	f2fs_set_inode_flags(inode);
+	f2fs_set_inode_flags(inode, true);
 
 	trace_f2fs_new_inode(inode, 0);
 	return inode;
