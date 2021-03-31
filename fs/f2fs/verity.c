@@ -192,7 +192,7 @@ static int f2fs_end_enable_verity(struct file *filp, const void *desc,
 
 	/* Finally, set the verity inode flag. */
 	file_set_verity(inode);
-	f2fs_set_inode_flags(inode);
+	f2fs_set_inode_flags(inode, false);
 	f2fs_mark_inode_dirty_sync(inode, true);
 
 	clear_inode_flag(inode, FI_VERITY_IN_PROGRESS);

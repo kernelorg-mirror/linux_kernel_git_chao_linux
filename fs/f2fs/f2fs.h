@@ -152,6 +152,9 @@ struct f2fs_mount_info {
 	unsigned char compress_ext_cnt;		/* extension count */
 	int compress_mode;			/* compression mode */
 	unsigned char extensions[COMPRESS_EXT_NUM][F2FS_EXTENSION_LEN];	/* extensions */
+
+	/* For dax */
+	int dax_mode;			/* dax mode */
 };
 
 #define F2FS_FEATURE_ENCRYPT		0x0001
@@ -1290,6 +1293,19 @@ enum {
 				 * user can control the file compression
 				 * using ioctls
 				 */
+};
+
+enum {
+	DAX_MODE_NONE,		/* no dax option */
+	DAX_MODE_ALWAYS,	/* always set S_DAX ignore FS_XFLAG_DAX */
+	DAX_MODE_NEVER,		/* never set S_DAX, ignore FS_XFLAG_DAX */
+	DAX_MODE_INODE,		/* follow FS_XFLAG_DAX" and is the default */
+	DAX_MODE_LAGECY,
+	/*
+	 * is a legacy option which is an alias for "dax=always".
+	 * This may be removed in the future so "-o dax=always" is
+	 * the preferred method for specifying this behavior.
+	 */
 };
 
 /*
@@ -2655,11 +2671,13 @@ static inline void f2fs_change_bit(unsigned int nr, char *addr)
 #define F2FS_DIRSYNC_FL			0x00010000 /* dirsync behaviour (directories only) */
 #define F2FS_PROJINHERIT_FL		0x20000000 /* Create with parents projid */
 #define F2FS_CASEFOLD_FL		0x40000000 /* Casefolded file */
+#define F2FS_DAX_FL			0x80000000 /* Dax file */
 
 /* Flags that should be inherited by new inodes from their parent. */
 #define F2FS_FL_INHERITED (F2FS_SYNC_FL | F2FS_NODUMP_FL | F2FS_NOATIME_FL | \
 			   F2FS_DIRSYNC_FL | F2FS_PROJINHERIT_FL | \
-			   F2FS_CASEFOLD_FL | F2FS_COMPR_FL | F2FS_NOCOMP_FL)
+			   F2FS_CASEFOLD_FL | F2FS_COMPR_FL | F2FS_NOCOMP_FL | \
+			   F2FS_DAX_FL)
 
 /* Flags that are appropriate for regular files (all but dir-specific ones). */
 #define F2FS_REG_FLMASK		(~(F2FS_DIRSYNC_FL | F2FS_PROJINHERIT_FL | \
@@ -3210,6 +3228,7 @@ int f2fs_getattr(struct user_namespace *mnt_userns, const struct path *path,
 int f2fs_setattr(struct user_namespace *mnt_userns, struct dentry *dentry,
 		 struct iattr *attr);
 int f2fs_truncate_hole(struct inode *inode, pgoff_t pg_start, pgoff_t pg_end);
+bool f2fs_should_enable_dax(struct inode *inode);
 void f2fs_truncate_data_blocks_range(struct dnode_of_data *dn, int count);
 int f2fs_precache_extents(struct inode *inode);
 long f2fs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
@@ -3220,7 +3239,7 @@ int f2fs_pin_file_control(struct inode *inode, bool inc);
 /*
  * inode.c
  */
-void f2fs_set_inode_flags(struct inode *inode);
+void f2fs_set_inode_flags(struct inode *inode, bool init);
 bool f2fs_inode_chksum_verify(struct f2fs_sb_info *sbi, struct page *page);
 void f2fs_inode_chksum_set(struct f2fs_sb_info *sbi, struct page *page);
 struct inode *f2fs_iget(struct super_block *sb, unsigned long ino);
@@ -3923,7 +3942,7 @@ static inline void f2fs_set_encrypted_inode(struct inode *inode)
 {
 #ifdef CONFIG_FS_ENCRYPTION
 	file_set_encrypt(inode);
-	f2fs_set_inode_flags(inode);
+	f2fs_set_inode_flags(inode, false);
 #endif
 }
 

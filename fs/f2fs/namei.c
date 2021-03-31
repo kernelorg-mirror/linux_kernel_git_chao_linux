@@ -129,7 +129,7 @@ static struct inode *f2fs_new_inode(struct inode *dir, umode_t mode)
 			set_compress_context(inode);
 	}
 
-	f2fs_set_inode_flags(inode);
+	f2fs_set_inode_flags(inode, true);
 
 	trace_f2fs_new_inode(inode, 0);
 	return inode;

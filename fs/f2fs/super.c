@@ -156,6 +156,8 @@ enum {
 	Opt_atgc,
 	Opt_gc_merge,
 	Opt_nogc_merge,
+	Opt_dax,
+	Opt_dax_mode,
 	Opt_err,
 };
 
@@ -230,6 +232,8 @@ static match_table_t f2fs_tokens = {
 	{Opt_atgc, "atgc"},
 	{Opt_gc_merge, "gc_merge"},
 	{Opt_nogc_merge, "nogc_merge"},
+	{Opt_dax, "dax"},
+	{Opt_dax_mode, "dax=%s"},
 	{Opt_err, NULL},
 };
 
@@ -1086,6 +1090,35 @@ static int parse_options(struct super_block *sb, char *options, bool is_remount)
 		case Opt_nogc_merge:
 			clear_opt(sbi, GC_MERGE);
 			break;
+		case Opt_dax:
+#ifdef CONFIG_FS_DAX
+			F2FS_OPTION(sbi).dax_mode = DAX_MODE_LAGECY;
+			break;
+#else
+			f2fs_info(sbi, "dax option not supported");
+			break;
+#endif
+		case Opt_dax_mode:
+#ifdef CONFIG_FS_DAX
+			name = match_strdup(&args[0]);
+			if (!name)
+				return -ENOMEM;
+			if (!strcmp(name, "always")) {
+				F2FS_OPTION(sbi).dax_mode = DAX_MODE_ALWAYS;
+			} else if (!strcmp(name, "never")) {
+				F2FS_OPTION(sbi).dax_mode = DAX_MODE_NEVER;
+			} else if (!strcmp(name, "inode")) {
+				F2FS_OPTION(sbi).dax_mode = DAX_MODE_INODE;
+			} else {
+				kfree(name);
+				return -EINVAL;
+			}
+			kfree(name);
+			break;
+#else
+			f2fs_info(sbi, "dax option not supported");
+			break;
+#endif
 		default:
 			f2fs_err(sbi, "Unrecognized mount option \"%s\" or missing value",
 				 p);
@@ -1158,6 +1191,26 @@ static int parse_options(struct super_block *sb, char *options, bool is_remount)
 		f2fs_err(sbi, "LFS not compatible with checkpoint=disable\n");
 		return -EINVAL;
 	}
+
+	if (test_opt(sbi, DISABLE_CHECKPOINT) &&
+			test_opt(sbi, MERGE_CHECKPOINT)) {
+		f2fs_err(sbi, "checkpoint=merge cannot be used with checkpoint=disable\n");
+		return -EINVAL;
+	}
+
+#ifdef CONFIG_FS_DAX
+	if (F2FS_OPTION(sbi).dax_mode != DAX_MODE_NONE) {
+		if (test_opt(sbi, INLINE_DATA)) {
+			f2fs_err(sbi, "Dax can not be enabled with inline_data "
+						"mountoption\n");
+			return -EINVAL;
+		}
+		if (!bdev_dax_supported(sb->s_bdev, F2FS_BLKSIZE)) {
+			f2fs_warn(sbi, "DAX unsupported by block device. Turning off DAX.");
+			F2FS_OPTION(sbi).dax_mode = DAX_MODE_NONE;
+		}
+	}
+#endif
 
 	/* Not pass down write hints if the number of active logs is lesser
 	 * than NR_CURSEG_PERSIST_TYPE.
@@ -1818,6 +1871,17 @@ static int f2fs_show_options(struct seq_file *seq, struct dentry *root)
 
 	if (test_opt(sbi, ATGC))
 		seq_puts(seq, ",atgc");
+
+#ifdef CONFIG_FS_DAX
+	if (F2FS_OPTION(sbi).dax_mode == DAX_MODE_ALWAYS)
+		seq_printf(seq, ",dax=%s", "always");
+	else if (F2FS_OPTION(sbi).dax_mode == DAX_MODE_NEVER)
+		seq_printf(seq, ",dax=%s", "never");
+	else if (F2FS_OPTION(sbi).dax_mode == DAX_MODE_INODE)
+		seq_printf(seq, ",dax=%s", "inode");
+	else if (F2FS_OPTION(sbi).dax_mode == DAX_MODE_LAGECY)
+		seq_puts(seq, ",dax");
+#endif
 	return 0;
 }
 
@@ -1836,6 +1900,7 @@ static void default_options(struct f2fs_sb_info *sbi)
 	F2FS_OPTION(sbi).compress_ext_cnt = 0;
 	F2FS_OPTION(sbi).compress_mode = COMPR_MODE_FS;
 	F2FS_OPTION(sbi).bggc_mode = BGGC_MODE_ON;
+	F2FS_OPTION(sbi).dax_mode = DAX_MODE_NONE;
 
 	sbi->sb->s_flags &= ~SB_INLINECRYPT;
 
@@ -2479,7 +2544,7 @@ static int f2fs_quota_on(struct super_block *sb, int type, int format_id,
 
 	inode_lock(inode);
 	F2FS_I(inode)->i_flags |= F2FS_NOATIME_FL | F2FS_IMMUTABLE_FL;
-	f2fs_set_inode_flags(inode);
+	f2fs_set_inode_flags(inode, false);
 	inode_unlock(inode);
 	f2fs_mark_inode_dirty_sync(inode, false);
 
@@ -2504,7 +2569,7 @@ static int __f2fs_quota_off(struct super_block *sb, int type)
 
 	inode_lock(inode);
 	F2FS_I(inode)->i_flags &= ~(F2FS_NOATIME_FL | F2FS_IMMUTABLE_FL);
-	f2fs_set_inode_flags(inode);
+	f2fs_set_inode_flags(inode, false);
 	inode_unlock(inode);
 	f2fs_mark_inode_dirty_sync(inode, false);
 out_put:
