@@ -363,7 +363,10 @@ static int f2fs_create(struct user_namespace *mnt_userns, struct inode *dir,
 
 	inode->i_op = &f2fs_file_inode_operations;
 	inode->i_fop = &f2fs_file_operations;
-	inode->i_mapping->a_ops = &f2fs_dblock_aops;
+	if (IS_DAX(inode))
+		inode->i_mapping->a_ops = &f2fs_dax_aops;
+	else
+		inode->i_mapping->a_ops = &f2fs_dblock_aops;
 	ino = inode->i_ino;
 
 	f2fs_lock_op(sbi);
@@ -866,7 +869,10 @@ static int __f2fs_tmpfile(struct user_namespace *mnt_userns, struct inode *dir,
 	} else {
 		inode->i_op = &f2fs_file_inode_operations;
 		inode->i_fop = &f2fs_file_operations;
-		inode->i_mapping->a_ops = &f2fs_dblock_aops;
+		if (IS_DAX(inode))
+			inode->i_mapping->a_ops = &f2fs_dax_aops;
+		else
+			inode->i_mapping->a_ops = &f2fs_dblock_aops;
 	}
 
 	f2fs_lock_op(sbi);

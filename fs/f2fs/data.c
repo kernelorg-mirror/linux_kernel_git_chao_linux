@@ -21,6 +21,7 @@
 #include <linux/sched/signal.h>
 #include <linux/fiemap.h>
 #include <linux/iomap.h>
+#include <linux/dax.h>
 
 #include "f2fs.h"
 #include "node.h"
@@ -4253,4 +4254,21 @@ static int f2fs_iomap_end(struct inode *inode, loff_t offset, loff_t length,
 const struct iomap_ops f2fs_iomap_ops = {
 	.iomap_begin	= f2fs_iomap_begin,
 	.iomap_end	= f2fs_iomap_end,
+};
+
+static int f2fs_dax_writepages(struct address_space *mapping,
+					struct writeback_control *wbc)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(mapping->host);
+
+	if (unlikely(f2fs_cp_error(sbi)))
+		return -EIO;
+
+	return dax_writeback_mapping_range(mapping, sbi->s_daxdev, wbc);
+}
+
+const struct address_space_operations f2fs_dax_aops = {
+	.writepages		= f2fs_dax_writepages,
+	.direct_IO		= noop_direct_IO,
+	.dirty_folio		= noop_dirty_folio,
 };

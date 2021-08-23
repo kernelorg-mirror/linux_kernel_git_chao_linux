@@ -526,7 +526,10 @@ make_now:
 	} else if (S_ISREG(inode->i_mode)) {
 		inode->i_op = &f2fs_file_inode_operations;
 		inode->i_fop = &f2fs_file_operations;
-		inode->i_mapping->a_ops = &f2fs_dblock_aops;
+		if (IS_DAX(inode))
+			inode->i_mapping->a_ops = &f2fs_dax_aops;
+		else
+			inode->i_mapping->a_ops = &f2fs_dblock_aops;
 	} else if (S_ISDIR(inode->i_mode)) {
 		inode->i_op = &f2fs_dir_inode_operations;
 		inode->i_fop = &f2fs_dir_operations;
