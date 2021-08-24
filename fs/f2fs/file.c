@@ -25,6 +25,9 @@
 #include <linux/fileattr.h>
 #include <linux/fadvise.h>
 #include <linux/iomap.h>
+#ifdef CONFIG_FS_DAX
+#include <linux/dax.h>
+#endif
 
 #include "f2fs.h"
 #include "node.h"
@@ -4226,6 +4229,56 @@ static const struct iomap_dio_ops f2fs_iomap_dio_read_ops = {
 	.end_io = f2fs_dio_read_end_io,
 };
 
+#ifdef CONFIG_FS_DAX
+extern const struct iomap_ops f2fs_iomap_ops;
+static ssize_t f2fs_dax_read_iter(struct kiocb *iocb, struct iov_iter *to)
+{
+	struct inode *inode = file_inode(iocb->ki_filp);
+	ssize_t ret;
+
+	if (iocb->ki_flags & IOCB_NOWAIT) {
+		if (!inode_trylock_shared(inode))
+			return -EAGAIN;
+	} else {
+		inode_lock_shared(inode);
+	}
+	/* Recheck dax flag under inode lock */
+	if (!IS_DAX(inode)) {
+		inode_unlock_shared(inode);
+		return generic_file_read_iter(iocb, to);
+	}
+	f2fs_down_read(&F2FS_I(inode)->i_gc_rwsem[READ]);
+	ret = dax_iomap_rw(iocb, to, &f2fs_iomap_ops);
+	f2fs_up_read(&F2FS_I(inode)->i_gc_rwsem[READ]);
+	inode_unlock_shared(inode);
+
+	file_accessed(iocb->ki_filp);
+	return ret;
+}
+
+static ssize_t f2fs_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+	struct inode *inode = file_inode(iocb->ki_filp);
+	ssize_t ret;
+
+	ret = file_remove_privs(iocb->ki_filp);
+	if (ret)
+		return ret;
+	ret = file_update_time(iocb->ki_filp);
+	if (ret)
+		return ret;
+
+	F2FS_I(inode)->i_dax_task = current;
+
+	f2fs_down_read(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+	ret = dax_iomap_rw(iocb, from, &f2fs_iomap_ops);
+	f2fs_up_read(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+
+	F2FS_I(inode)->i_dax_task = NULL;
+	return ret;
+}
+#endif
+
 static ssize_t f2fs_dio_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
 	struct file *file = iocb->ki_filp;
@@ -4302,6 +4355,11 @@ static ssize_t f2fs_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		kfree(p);
 	}
 skip_read_trace:
+#ifdef CONFIG_FS_DAX
+	if (IS_DAX(inode))
+		return f2fs_dax_read_iter(iocb, to);
+#endif
+
 	if (f2fs_should_use_dio(inode, iocb, to)) {
 		ret = f2fs_dio_read_iter(iocb, to);
 	} else {
@@ -4596,6 +4654,12 @@ static ssize_t f2fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (ret <= 0)
 		goto out_unlock;
 
+#ifdef CONFIG_FS_DAX
+	if (IS_DAX(inode)) {
+		ret = f2fs_dax_write_iter(iocb, from);
+		goto out_unlock;
+	}
+#endif
 	/* Determine whether we will do a direct write or a buffered write. */
 	dio = f2fs_should_use_dio(inode, iocb, from);
 

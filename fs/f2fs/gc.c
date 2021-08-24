@@ -1575,6 +1575,10 @@ next_step:
 			int err;
 
 			if (S_ISREG(inode->i_mode)) {
+#ifdef CONFIG_FS_DAX
+				if (IS_DAX(inode) && fi->i_dax_task == current)
+					goto move_data;
+#endif
 				if (!f2fs_down_write_trylock(&fi->i_gc_rwsem[READ])) {
 					sbi->skipped_gc_rwsem++;
 					continue;
@@ -1590,7 +1594,9 @@ next_step:
 				/* wait for all inflight aio data */
 				inode_dio_wait(inode);
 			}
-
+#ifdef CONFIG_FS_DAX
+move_data:
+#endif
 			start_bidx = f2fs_start_bidx_of_node(nofs, inode)
 								+ ofs_in_node;
 			if (f2fs_post_read_required(inode))

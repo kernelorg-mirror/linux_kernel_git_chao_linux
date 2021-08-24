@@ -819,6 +819,11 @@ struct f2fs_inode_info {
 	unsigned int i_cluster_size;		/* cluster size */
 
 	unsigned int atomic_write_cnt;
+
+#ifdef CONFIG_FS_DAX
+	/* for dax */
+	struct task_struct *i_dax_task;		/* store dax witer task */
+#endif
 };
 
 static inline void get_extent_info(struct extent_info *ext,
