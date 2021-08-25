@@ -1030,6 +1030,10 @@ int f2fs_setattr(struct user_namespace *mnt_userns, struct dentry *dentry,
 		f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 		filemap_invalidate_lock(inode->i_mapping);
 
+		err = f2fs_break_layouts(inode);
+		if (err)
+			goto out_unlock;
+
 		truncate_setsize(inode, attr->ia_size);
 
 		if (attr->ia_size <= old_size)
@@ -1038,6 +1042,7 @@ int f2fs_setattr(struct user_namespace *mnt_userns, struct dentry *dentry,
 		 * do not trim all blocks after i_size if target size is
 		 * larger than i_size.
 		 */
+out_unlock:
 		filemap_invalidate_unlock(inode->i_mapping);
 		f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 		if (err)
@@ -1080,6 +1085,35 @@ const struct inode_operations f2fs_file_inode_operations = {
 	.fileattr_get	= f2fs_fileattr_get,
 	.fileattr_set	= f2fs_fileattr_set,
 };
+
+static void f2fs_wait_dax_page(struct inode *inode)
+{
+	filemap_invalidate_unlock(inode->i_mapping);
+	schedule();
+	filemap_invalidate_lock(inode->i_mapping);
+}
+
+int f2fs_break_layouts(struct inode *inode)
+{
+	struct page *page;
+	int error;
+
+	if (WARN_ON_ONCE(!rwsem_is_locked(&inode->i_mapping->invalidate_lock)))
+		return -EINVAL;
+
+	do {
+		page = dax_layout_busy_page(inode->i_mapping);
+		if (!page)
+			return 0;
+
+		error = ___wait_var_event(&page->_refcount,
+				atomic_read(&page->_refcount) == 1,
+				TASK_INTERRUPTIBLE, 0, 0,
+				f2fs_wait_dax_page(inode));
+	} while (error == 0);
+
+	return error;
+}
 
 static int fill_zero(struct inode *inode, pgoff_t index,
 					loff_t start, loff_t len)
@@ -1199,12 +1233,17 @@ static int punch_hole(struct inode *inode, loff_t offset, loff_t len)
 			f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 			filemap_invalidate_lock(inode->i_mapping);
 
+			ret = f2fs_break_layouts(inode);
+			if (ret)
+				goto out_unlock;
+
 			truncate_pagecache_range(inode, blk_start, blk_end - 1);
 
 			f2fs_lock_op(sbi);
 			ret = f2fs_truncate_hole(inode, pg_start, pg_end);
 			f2fs_unlock_op(sbi);
 
+out_unlock:
 			filemap_invalidate_unlock(inode->i_mapping);
 			f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 		}
@@ -1484,11 +1523,18 @@ static int f2fs_collapse_range(struct inode *inode, loff_t offset, loff_t len)
 	/* write out all moved pages, if possible */
 	f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 	filemap_invalidate_lock(inode->i_mapping);
+
+	ret = f2fs_break_layouts(inode);
+	if (ret)
+		goto out_unlock;
+
 	filemap_write_and_wait_range(inode->i_mapping, offset, LLONG_MAX);
 	truncate_pagecache(inode, offset);
 
 	new_size = i_size_read(inode) - len;
 	ret = f2fs_truncate_blocks(inode, new_size, true);
+
+out_unlock:
 	filemap_invalidate_unlock(inode->i_mapping);
 	f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 	if (!ret)
@@ -1600,6 +1646,13 @@ static int f2fs_zero_range(struct inode *inode, loff_t offset, loff_t len,
 			f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 			filemap_invalidate_lock(mapping);
 
+			ret = f2fs_break_layouts(inode);
+			if (ret) {
+				filemap_invalidate_unlock(inode->i_mapping);
+				f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
+				goto out;
+			}
+
 			truncate_pagecache_range(inode,
 				(loff_t)index << PAGE_SHIFT,
 				((loff_t)pg_end << PAGE_SHIFT) - 1);
@@ -1685,7 +1738,11 @@ static int f2fs_insert_range(struct inode *inode, loff_t offset, loff_t len)
 
 	f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 	filemap_invalidate_lock(mapping);
-	ret = f2fs_truncate_blocks(inode, i_size_read(inode), true);
+
+	ret = f2fs_break_layouts(inode);
+	if (!ret)
+		ret = f2fs_truncate_blocks(inode, i_size_read(inode), true);
+
 	filemap_invalidate_unlock(mapping);
 	f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 	if (ret)
@@ -1704,6 +1761,11 @@ static int f2fs_insert_range(struct inode *inode, loff_t offset, loff_t len)
 	/* avoid gc operation during block exchange */
 	f2fs_down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 	filemap_invalidate_lock(mapping);
+
+	ret = f2fs_break_layouts(inode);
+	if (!ret)
+		goto unlock;
+
 	truncate_pagecache(inode, offset);
 
 	while (!ret && idx > pg_start) {
@@ -1719,13 +1781,22 @@ static int f2fs_insert_range(struct inode *inode, loff_t offset, loff_t len)
 					idx + delta, nr, false);
 		f2fs_unlock_op(sbi);
 	}
+unlock:
 	filemap_invalidate_unlock(mapping);
 	f2fs_up_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 
+	if (ret)
+		return ret;
+
 	/* write out all moved pages, if possible */
 	filemap_invalidate_lock(mapping);
-	filemap_write_and_wait_range(mapping, offset, LLONG_MAX);
+	ret = f2fs_break_layouts(inode);
+	if (!ret)
+		goto out_unlock;
+
+	filemap_write_and_wait_range(inode->i_mapping, offset, LLONG_MAX);
 	truncate_pagecache(inode, offset);
+out_unlock:
 	filemap_invalidate_unlock(mapping);
 
 	if (!ret)

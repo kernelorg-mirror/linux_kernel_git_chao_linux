@@ -3473,6 +3473,7 @@ int f2fs_getattr(struct user_namespace *mnt_userns, const struct path *path,
 		 struct kstat *stat, u32 request_mask, unsigned int flags);
 int f2fs_setattr(struct user_namespace *mnt_userns, struct dentry *dentry,
 		 struct iattr *attr);
+int f2fs_break_layouts(struct inode *inode);
 int f2fs_truncate_hole(struct inode *inode, pgoff_t pg_start, pgoff_t pg_end);
 bool f2fs_enable_dax_option(struct f2fs_sb_info *sbi);
 bool f2fs_should_enable_dax(struct inode *inode);
