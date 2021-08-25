@@ -1497,9 +1497,6 @@ static int f2fs_collapse_range(struct inode *inode, loff_t offset, loff_t len)
 	loff_t new_size;
 	int ret;
 
-	if (IS_DAX(inode))
-		return -EOPNOTSUPP;
-
 	if (offset + len >= i_size_read(inode))
 		return -EINVAL;
 
@@ -1714,9 +1711,6 @@ static int f2fs_insert_range(struct inode *inode, loff_t offset, loff_t len)
 	pgoff_t nr, pg_start, pg_end, delta, idx;
 	loff_t new_size;
 	int ret = 0;
-
-	if (IS_DAX(inode))
-		return -EOPNOTSUPP;
 
 	new_size = i_size_read(inode) + len;
 	ret = inode_newsize_ok(inode, new_size);
