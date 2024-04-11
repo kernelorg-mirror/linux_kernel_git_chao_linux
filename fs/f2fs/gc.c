@@ -390,7 +390,7 @@ static inline unsigned int get_gc_cost(struct f2fs_sb_info *sbi,
 			unsigned int valid_thresh_ratio)
 {
 	if (p->alloc_mode == SSR)
-		return get_seg_entry(sbi, segno)->ckpt_valid_blocks;
+		return get_seg_entry(sbi, segno)->written_blocks;
 
 	if (p->one_time_gc && (valid_thresh_ratio < 100) &&
 			(get_valid_blocks(sbi, segno, true) >=
