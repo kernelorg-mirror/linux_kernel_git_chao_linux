@@ -992,3 +992,23 @@ set a flag on /mnt/f2fs/vdc.file ret=0, flags=noimmutable
 So, the key idea is, user can do any file operations on /dev/vdc, and
 reclaim the space after the use, while the space is counted as /data.
 That doesn't require modifying partition size and filesystem format.
+
+Disk layout
+             ,-----------------------------------------> MAX_BLKADDR -,
+             |  ,------------- TOTAL_BLKS ----------------------------,
+             |  |                                                     |
+             |  ,- seg0_blkaddr   ,----- sit/nat/ssa/main blkaddress  |
+    block    |  | (SEG0_BLKADDR)  | | | |   (e.g., MAIN_BLKADDR)      |
+    address  0..x................ a b c d .............................
+                |                                                     |
+    global seg# 0...................... m .............................
+                |                       |                             |
+                |                       `------- MAIN_SEGS -----------'
+                `-------------- TOTAL_SEGS ---------------------------'
+                                        |                             |
+     seg#                               0..........xx..................
+
+    = Note =
+     o GET_SEGNO_FROM_SEG0 : blk address -> global segno
+     o GET_SEGNO           : blk address -> segno
+     o START_BLOCK         : segno -> starting block address
