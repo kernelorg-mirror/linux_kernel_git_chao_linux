@@ -2877,6 +2877,14 @@ retry:
 			dst->i_crtime = src->i_crtime;
 			dst->i_crtime_nsec = src->i_crtime_nsec;
 		}
+		if (f2fs_sb_has_compression(sbi) &&
+			F2FS_FITS_IN_INODE(src, le16_to_cpu(src->i_extra_isize),
+			i_log_cluster_size) && src->i_flags & F2FS_COMPR_FL) {
+			dst->i_blocks = src->i_blocks;
+			dst->i_compress_algorithm = src->i_compress_algorithm;
+			dst->i_compr_blocks = src->i_compr_blocks;
+			dst->i_log_cluster_size = src->i_log_cluster_size;
+		}
 	}
 
 	new_ni = old_ni;

@@ -717,6 +717,11 @@ retry_dn:
 		 * and then reserve one new block in dnode page.
 		 */
 		if (dest == NEW_ADDR) {
+			if (f2fs_compressed_file(inode)) {
+				recovered++;
+				f2fs_update_data_blkaddr(&dn, dest);
+				continue;
+			}
 			f2fs_truncate_data_blocks_range(&dn, 1);
 
 			err = f2fs_reserve_new_block_retry(&dn);
@@ -755,6 +760,10 @@ retry_prev:
 			f2fs_replace_block(sbi, &dn, src, dest,
 						ni.version, false, false);
 			recovered++;
+		} else if (f2fs_compressed_file(inode) &&
+				(dest == COMPRESS_ADDR)) {
+			recovered++;
+			f2fs_update_data_blkaddr(&dn, dest);
 		}
 	}
 
