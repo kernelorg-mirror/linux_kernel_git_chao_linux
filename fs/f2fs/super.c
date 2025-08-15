@@ -2057,17 +2057,37 @@ int f2fs_sync_fs(struct super_block *sb, int sync)
 	if (unlikely(is_sbi_flag_set(sbi, SBI_POR_DOING)))
 		return -EAGAIN;
 
+	if (sb->s_writers.frozen == SB_FREEZE_PAGEFAULT)
+		f2fs_info_ratelimited(sbi, "f2fs_sync_fs() from freeze_super() start");
+
 	if (sync) {
 		stat_inc_cp_call_count(sbi, TOTAL_CALL);
 		err = f2fs_issue_checkpoint(sbi);
 	}
 
+	if (sb->s_writers.frozen == SB_FREEZE_PAGEFAULT)
+		f2fs_info_ratelimited(sbi, "f2fs_sync_fs() from freeze_super() end");
+
 	return err;
+}
+
+static int f2fs_freeze_super(struct super_block *sb, enum freeze_holder who,
+						const void *freeze_owner)
+{
+	int ret;
+
+	f2fs_info_ratelimited(F2FS_SB(sb), "f2fs_freeze_super() start");
+	ret = freeze_super(sb, who, freeze_owner);
+	f2fs_info_ratelimited(F2FS_SB(sb), "f2fs_freeze_super() end");
+
+	return ret;
 }
 
 static int f2fs_freeze(struct super_block *sb)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
+
+	f2fs_info_ratelimited(sbi, "f2fs_freeze() start");
 
 	if (f2fs_readonly(sb))
 		return 0;
@@ -2107,6 +2127,9 @@ static int f2fs_unfreeze(struct super_block *sb)
 		f2fs_issue_discard_timeout(sbi);
 
 	clear_sbi_flag(F2FS_SB(sb), SBI_IS_FREEZING);
+
+	f2fs_info_ratelimited(sbi, "f2fs_unfreeze() end");
+
 	return 0;
 }
 
@@ -3598,6 +3621,7 @@ static const struct super_operations f2fs_sops = {
 	.evict_inode	= f2fs_evict_inode,
 	.put_super	= f2fs_put_super,
 	.sync_fs	= f2fs_sync_fs,
+	.freeze_super	= f2fs_freeze_super,
 	.freeze_fs	= f2fs_freeze,
 	.unfreeze_fs	= f2fs_unfreeze,
 	.statfs		= f2fs_statfs,
