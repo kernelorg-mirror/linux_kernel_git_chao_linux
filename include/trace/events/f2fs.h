@@ -1369,6 +1369,42 @@ DEFINE_EVENT(f2fs__folio, f2fs_set_page_dirty,
 	TP_ARGS(folio, type)
 );
 
+TRACE_EVENT(f2fs_prepare_write_page,
+
+	TP_PROTO(struct folio *folio, u32 chksum),
+
+	TP_ARGS(folio, chksum),
+
+	TP_STRUCT__entry(
+		__field(dev_t,	dev)
+		__field(ino_t,	ino)
+		__field(int, dir)
+		__field(pgoff_t, index)
+		__field(int, dirty)
+		__field(int, uptodate)
+		__field(u32, chksum)
+	),
+
+	TP_fast_assign(
+		__entry->dev	= folio->mapping->host->i_sb->s_dev;
+		__entry->ino	= folio->mapping->host->i_ino;
+		__entry->dir	= S_ISDIR(folio->mapping->host->i_mode);
+		__entry->index	= folio->index;
+		__entry->dirty	= folio_test_dirty(folio);
+		__entry->uptodate = folio_test_uptodate(folio);
+		__entry->chksum	= chksum;
+	),
+
+	TP_printk("dev = (%d,%d), ino = %lu, %s, index = %lu, "
+		"dirty = %d, uptodate = %d, chksum = 0x%x",
+		show_dev_ino(__entry),
+		show_file_type(__entry->dir),
+		(unsigned long)__entry->index,
+		__entry->dirty,
+		__entry->uptodate,
+		__entry->chksum)
+);
+
 TRACE_EVENT(f2fs_replace_atomic_write_block,
 
 	TP_PROTO(struct inode *inode, struct inode *cow_inode, pgoff_t index,

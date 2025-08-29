@@ -2638,6 +2638,7 @@ int f2fs_do_write_data_page(struct f2fs_io_info *fio)
 	struct inode *inode = folio->mapping->host;
 	struct dnode_of_data dn;
 	struct node_info ni;
+	__u32 chksum;
 	bool ipu_force = false;
 	bool atomic_commit;
 	int err = 0;
@@ -2689,6 +2690,10 @@ got_it:
 	/* wait for GCed page writeback via META_MAPPING */
 	if (fio->meta_gc)
 		f2fs_wait_on_block_writeback(inode, fio->old_blkaddr);
+
+	chksum = f2fs_chksum(fio->sbi->s_chksum_seed,
+			folio_address(folio), folio_size(folio));
+	trace_f2fs_prepare_write_page(folio, chksum);
 
 	/*
 	 * If current allocation needs SSR,
