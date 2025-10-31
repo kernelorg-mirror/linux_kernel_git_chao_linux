@@ -1002,31 +1002,28 @@ rwsem_down_read_slowpath(struct rw_semaphore *sem, long count, unsigned int stat
 	 * writer, don't attempt optimistic lock stealing if the lock is
 	 * very likely owned by readers.
 	 */
-	if ((atomic_long_read(&sem->owner) & RWSEM_READER_OWNED) &&
-	    (rcnt > 1) && !(count & RWSEM_WRITER_LOCKED))
+	if ((count & (RWSEM_WRITER_LOCKED | RWSEM_FLAG_HANDOFF)) ||
+	    ((atomic_long_read(&sem->owner) & RWSEM_READER_OWNED) &&
+	    (rcnt > 1)))
 		goto queue;
 
 	/*
 	 * Reader optimistic lock stealing.
 	 */
-	if (!(count & (RWSEM_WRITER_LOCKED | RWSEM_FLAG_HANDOFF))) {
-		rwsem_set_reader_owned(sem);
-		lockevent_inc(rwsem_rlock_steal);
+	rwsem_set_reader_owned(sem);
+	lockevent_inc(rwsem_rlock_steal);
 
-		/*
-		 * Wake up other readers in the wait queue if it is
-		 * the first reader.
-		 */
-		if ((rcnt == 1) && (count & RWSEM_FLAG_WAITERS)) {
-			raw_spin_lock_irq(&sem->wait_lock);
-			if (!list_empty(&sem->wait_list))
-				rwsem_mark_wake(sem, RWSEM_WAKE_READ_OWNED,
-						&wake_q);
-			raw_spin_unlock_irq(&sem->wait_lock);
-			wake_up_q(&wake_q);
-		}
-		return sem;
+	/*
+	 * Wake up other readers in the wait queue if it is the first reader.
+	 */
+	if ((rcnt == 1) && (count & RWSEM_FLAG_WAITERS)) {
+		raw_spin_lock_irq(&sem->wait_lock);
+		if (!list_empty(&sem->wait_list))
+			rwsem_mark_wake(sem, RWSEM_WAKE_READ_OWNED, &wake_q);
+		raw_spin_unlock_irq(&sem->wait_lock);
+		wake_up_q(&wake_q);
 	}
+	return sem;
 
 queue:
 	waiter.task = current;
