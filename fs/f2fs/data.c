@@ -1525,13 +1525,10 @@ static inline struct fsverity_info *f2fs_need_verity(const struct inode *inode,
 	return NULL;
 }
 
-struct folio *f2fs_get_read_data_folio(struct inode *inode, pgoff_t index,
-		blk_opf_t op_flags, bool for_write, pgoff_t *next_pgofs)
+struct folio *f2fs_grab_non_large_folio(struct address_space *mapping,
+				pgoff_t index, bool for_write)
 {
-	struct address_space *mapping = inode->i_mapping;
-	struct dnode_of_data dn;
 	struct folio *folio;
-	int err;
 retry:
 	folio = f2fs_grab_cache_folio(mapping, index, for_write);
 	if (IS_ERR(folio))
@@ -1547,6 +1544,20 @@ retry:
 		f2fs_schedule_timeout(DEFAULT_SCHEDULE_TIMEOUT);
 		goto retry;
 	}
+
+	return folio;
+}
+
+struct folio *f2fs_get_read_data_folio(struct inode *inode, pgoff_t index,
+		blk_opf_t op_flags, bool for_write, pgoff_t *next_pgofs)
+{
+	struct dnode_of_data dn;
+	struct folio *folio;
+	int err;
+
+	folio = f2fs_grab_non_large_folio(inode->i_mapping, index, for_write);
+	if (IS_ERR(folio))
+		return folio;
 
 	if (f2fs_lookup_read_extent_cache_block(inode, index,
 						&dn.data_blkaddr)) {

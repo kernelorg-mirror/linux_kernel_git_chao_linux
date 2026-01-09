@@ -1366,7 +1366,7 @@ static int move_data_block(struct inode *inode, block_t bidx,
 	f2fs_up_read(&F2FS_I(inode)->i_sem);
 
 	/* do not read out */
-	folio = f2fs_grab_cache_folio(mapping, bidx, false);
+	folio = f2fs_grab_non_large_folio(mapping, bidx, false);
 	if (IS_ERR(folio)) {
 		err = PTR_ERR(folio);
 		goto out_iput;
