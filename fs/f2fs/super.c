@@ -2770,6 +2770,8 @@ static int f2fs_enable_checkpoint(struct f2fs_sb_info *sbi)
 					get_nr_caches(sbi, F2FS_DIRTY_NODES),
 					get_nr_caches(sbi, F2FS_DIRTY_DATA));
 
+	trace_f2fs_enable_checkpoint(sbi, ENABLE_CP_START);
+
 	start = ktime_get();
 
 	set_sbi_flag(sbi, SBI_ENABLE_CHECKPOINT);
@@ -2799,6 +2801,8 @@ static int f2fs_enable_checkpoint(struct f2fs_sb_info *sbi)
 			break;
 	} while (retry--);
 
+	trace_f2fs_enable_checkpoint(sbi, ENABLE_CP_SYNC_INODE);
+
 	clear_sbi_flag(sbi, SBI_ENABLE_CHECKPOINT);
 
 	writeback = ktime_get();
@@ -2819,12 +2823,16 @@ static int f2fs_enable_checkpoint(struct f2fs_sb_info *sbi)
 	set_sbi_flag(sbi, SBI_IS_DIRTY);
 	f2fs_up_write_trace(&sbi->gc_lock, &lc);
 
+	trace_f2fs_enable_checkpoint(sbi, ENABLE_CP_SYNC_FS);
+
 	ret = f2fs_sync_fs(sbi->sb, 1);
 	if (ret)
 		f2fs_err(sbi, "%s sync_fs failed, ret: %d", __func__, ret);
 
 	/* Let's ensure there's no pending checkpoint anymore */
 	f2fs_flush_ckpt_thread(sbi);
+
+	trace_f2fs_enable_checkpoint(sbi, ENABLE_CP_END);
 
 	end = ktime_get();
 
