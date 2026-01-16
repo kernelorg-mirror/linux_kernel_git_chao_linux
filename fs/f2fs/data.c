@@ -1799,11 +1799,15 @@ int f2fs_get_block_locked(struct dnode_of_data *dn, pgoff_t index)
 	struct f2fs_lock_context lc;
 	int err = 0;
 
+	trace_f2fs_map_lock(dn->inode, index, F2FS_GET_BLOCK_PRE_AIO, "start");
+
 	f2fs_map_lock(sbi, &lc, F2FS_GET_BLOCK_PRE_AIO);
 	if (!f2fs_lookup_read_extent_cache_block(dn->inode, index,
 						&dn->data_blkaddr))
 		err = f2fs_reserve_block(dn, index);
 	f2fs_map_unlock(sbi, &lc, F2FS_GET_BLOCK_PRE_AIO);
+
+	trace_f2fs_map_lock(dn->inode, index, F2FS_GET_BLOCK_PRE_AIO, "end");
 
 	return err;
 }
@@ -1953,6 +1957,7 @@ next_dnode:
 	if (map->m_may_create) {
 		if (f2fs_lfs_mode(sbi))
 			f2fs_balance_fs(sbi, true);
+		trace_f2fs_map_lock(inode, pgofs, flag, "map_block start");
 		f2fs_map_lock(sbi, &lc, flag);
 	}
 
@@ -2121,6 +2126,7 @@ skip:
 
 	if (map->m_may_create) {
 		f2fs_map_unlock(sbi, &lc, flag);
+		trace_f2fs_map_lock(inode, start_pgofs, flag, "map_block end");
 		f2fs_balance_fs(sbi, dn.node_changed);
 	}
 	goto next_dnode;
@@ -3946,9 +3952,11 @@ static int prepare_write_begin(struct f2fs_sb_info *sbi,
 		 * node_change, otherwise concurrent checkpoint may persist
 		 * inline data only w/o F2FS_DATA_EXIST.
 		 */
+		trace_f2fs_map_lock(inode, index, flag, "write_begin1 start");
 		f2fs_map_lock(sbi, &lc, flag);
 		locked = true;
 	} else if ((pos & PAGE_MASK) >= i_size_read(inode)) {
+		trace_f2fs_map_lock(inode, index, flag, "write_begin2 start");
 		f2fs_map_lock(sbi, &lc, flag);
 		locked = true;
 	}
@@ -3993,6 +4001,7 @@ restart:
 		if (!err && dn.data_blkaddr != NULL_ADDR)
 			goto out;
 		f2fs_put_dnode(&dn);
+		trace_f2fs_map_lock(inode, index, flag, "write_begin3 start");
 		f2fs_map_lock(sbi, &lc, F2FS_GET_BLOCK_PRE_AIO);
 		WARN_ON(flag != F2FS_GET_BLOCK_PRE_AIO);
 		locked = true;
@@ -4006,8 +4015,10 @@ out:
 	}
 	f2fs_put_dnode(&dn);
 unlock_out:
-	if (locked)
+	if (locked) {
 		f2fs_map_unlock(sbi, &lc, flag);
+		trace_f2fs_map_lock(inode, index, flag, "write_begin end");
+	}
 	return err;
 }
 
@@ -4047,6 +4058,7 @@ static int __reserve_data_block(struct inode *inode, pgoff_t index,
 	struct f2fs_cached_block *ientry;
 	int err = 0;
 
+	trace_f2fs_map_lock(inode, index, F2FS_GET_BLOCK_PRE_AIO, "reserve start");
 	f2fs_map_lock(sbi, &lc, F2FS_GET_BLOCK_PRE_AIO);
 
 	ientry = f2fs_get_inode_cache(sbi, inode->i_ino);
@@ -4066,6 +4078,7 @@ static int __reserve_data_block(struct inode *inode, pgoff_t index,
 
 unlock_out:
 	f2fs_map_unlock(sbi, &lc, F2FS_GET_BLOCK_PRE_AIO);
+	trace_f2fs_map_lock(inode, index, F2FS_GET_BLOCK_PRE_AIO, "reserve start");
 	return err;
 }
 
