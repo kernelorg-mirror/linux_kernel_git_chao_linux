@@ -296,6 +296,7 @@ static const struct constant_table f2fs_param_errors[] = {
 	{"remount-ro",	MOUNT_ERRORS_READONLY},
 	{"continue",	MOUNT_ERRORS_CONTINUE},
 	{"panic",	MOUNT_ERRORS_PANIC},
+	{"ignore",	MOUNT_ERRORS_IGNORE},
 	{}
 };
 
@@ -2573,6 +2574,8 @@ static int f2fs_show_options(struct seq_file *seq, struct dentry *root)
 		seq_printf(seq, ",errors=%s", "continue");
 	else if (F2FS_OPTION(sbi).errors == MOUNT_ERRORS_PANIC)
 		seq_printf(seq, ",errors=%s", "panic");
+	else if (F2FS_OPTION(sbi).errors == MOUNT_ERRORS_IGNORE)
+		seq_printf(seq, ",errors=%s", "ignore");
 
 	if (test_opt(sbi, NAT_BITS))
 		seq_puts(seq, ",nat_bits");
@@ -4951,6 +4954,9 @@ void f2fs_fault_report(struct super_block *sb, unsigned int err_code,
 void f2fs_stop_checkpoint(struct f2fs_sb_info *sbi, bool end_io,
 						unsigned char reason)
 {
+	if (F2FS_OPTION(sbi).errors == MOUNT_ERRORS_IGNORE)
+		return;
+
 	if (reason != STOP_CP_REASON_SHUTDOWN)
 		f2fs_fault_report(sbi->sb, REPORT_FAULT_STOP_CP, __func__, reason);
 

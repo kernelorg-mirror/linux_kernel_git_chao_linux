@@ -375,24 +375,24 @@ age_extent_cache	 Enable an age extent cache based on rb-tree. It records
 			 order to provide better temperature hints for data block
 			 allocation.
 errors=%s		 Specify f2fs behavior on critical errors. This supports modes:
-			 "panic", "continue" and "remount-ro", respectively, trigger
-			 panic immediately, continue without doing anything, and remount
-			 the partition in read-only mode. By default it uses "continue"
-			 mode.
+			 "panic", "continue", "remount-ro" and "ignore", respectively,
+			 trigger panic immediately, continue without doing anything,
+			 remount the partition in read-only mode, and ignore any errors.
+			 By default it uses "continue" mode.
 
 			 .. code-block:: none
 
-			     ====================== =============== =============== ========
-			     mode                   continue        remount-ro      panic
-			     ====================== =============== =============== ========
-			     access ops             normal          normal          N/A
-			     syscall errors         -EIO            -EROFS          N/A
-			     mount option           rw              ro              N/A
-			     pending dir write      keep            keep            N/A
-			     pending non-dir write  drop            keep            N/A
-			     pending node write     drop            keep            N/A
-			     pending meta write     keep            keep            N/A
-			     ====================== =============== =============== ========
+			     ====================== ========= =========== ====== =======
+			     mode                   continue  remount-ro  panic  ignore
+			     ====================== ========= =========== ====== =======
+			     access ops             normal    normal      N/A	 N/A
+			     syscall errors         -EIO      -EROFS      N/A    N/A
+			     mount option           rw        ro          N/A    N/A
+			     pending dir write      keep      keep        N/A    N/A
+			     pending non-dir write  drop      keep        N/A    N/A
+			     pending node write     drop      keep        N/A    N/A
+			     pending meta write     keep      keep        N/A    N/A
+			     ====================== ========= =========== ====== =======
 nat_bits		 Enable nat_bits feature to enhance full/empty nat blocks access,
 			 by default it's disabled.
 lookup_mode=%s		 Control the directory lookup behavior for casefolded
