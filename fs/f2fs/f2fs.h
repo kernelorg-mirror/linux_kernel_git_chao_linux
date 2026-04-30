@@ -1582,6 +1582,7 @@ enum errors_option {
 	MOUNT_ERRORS_READONLY,	/* remount fs ro on errors */
 	MOUNT_ERRORS_CONTINUE,	/* continue on errors */
 	MOUNT_ERRORS_PANIC,	/* panic on errors */
+	MOUNT_ERRORS_IGNORE,	/* ignore any errors */
 };
 
 enum {
