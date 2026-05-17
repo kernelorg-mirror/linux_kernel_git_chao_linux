@@ -114,6 +114,10 @@ enum f2fs_error {
 	ERROR_INVALID_NODE_REFERENCE,
 	ERROR_INCONSISTENT_NAT,
 	ERROR_INCONSISTENT_ORPHAN,
+	/* caused by recovery, no need to report fserror */
+	ERROR_INCONSISTENT_SECTION_TYPE_EMPTY,
+	/* mixed data|node segments caused by fuzz or bug, need to report fserror */
+	ERROR_INCONSISTENT_SECTION_TYPE_MIXED,
 	ERROR_MAX,
 };
 

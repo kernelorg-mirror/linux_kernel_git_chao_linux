@@ -4861,6 +4861,7 @@ static void f2fs_report_fserror(struct f2fs_sb_info *sbi, unsigned char error)
 	case ERROR_INCONSISTENT_SIT:
 	case ERROR_INVALID_NODE_REFERENCE:
 	case ERROR_INCONSISTENT_NAT:
+	case ERROR_INCONSISTENT_SECTION_TYPE_MIXED:
 		fserror_report_metadata(sbi->sb, -EFSCORRUPTED, GFP_NOFS);
 		break;
 	default:

@@ -5025,6 +5025,54 @@ out:
 	set_prefree_as_free_segments(sbi);
 }
 
+static void sanity_check_section_type(struct f2fs_sb_info *sbi,
+							unsigned int secno)
+{
+	unsigned int segno = GET_START_SEG_FROM_SEC(sbi, secno);
+	unsigned int end_segno;
+	unsigned int data_seg = 0, node_seg = 0;
+	unsigned int empty_data_seg = 0, empty_node_seg = 0;
+
+	if (is_cursec(sbi, secno))
+		return;
+
+	end_segno = segno + (f2fs_sb_has_blkzoned(sbi) ?
+			f2fs_usable_segs_in_sec(sbi) : SEGS_PER_SEC(sbi));
+
+	for (; segno < end_segno; segno++) {
+		struct seg_entry * se = get_seg_entry(sbi, segno);
+
+		if (se->valid_blocks) {
+			if (IS_DATASEG(se->type))
+				data_seg++;
+			else
+				node_seg++;
+		} else {
+			if (IS_DATASEG(se->type))
+				empty_data_seg++;
+			else
+				empty_node_seg++;
+		}
+	}
+
+	if (data_seg && node_seg) {
+		f2fs_err(sbi, "critical inconsistent section (%u) type: valid: Data(%u) Node(%u)"
+				"empty: Data(%u), Node(%u)",
+				secno, data_seg, node_seg,
+				empty_data_seg, empty_node_seg);
+		f2fs_handle_error(sbi, ERROR_INCONSISTENT_SECTION_TYPE_MIXED);
+	}
+
+	if ((data_seg && empty_node_seg) ||
+		(node_seg && empty_data_seg)) {
+		f2fs_err(sbi, "minor inconsistent section (%u) type: valid: Data(%u) Node(%u)"
+				"empty: Data(%u), Node(%u)",
+				secno, data_seg, node_seg,
+				empty_data_seg, empty_node_seg);
+		f2fs_handle_error(sbi, ERROR_INCONSISTENT_SECTION_TYPE_EMPTY);
+	}
+}
+
 static int build_sit_info(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_super_block *raw_super = F2FS_RAW_SUPER(sbi);
@@ -5305,10 +5353,13 @@ init_discard_map_done:
 
 	/* update ckpt_valid_block */
 	if (__is_large_section(sbi)) {
-		unsigned int segno;
+		unsigned int segno, secno;
 
 		for (segno = 0; segno < MAIN_SEGS(sbi); segno += SEGS_PER_SEC(sbi))
 			set_ckpt_valid_blocks(sbi, segno);
+
+		for (secno = 0; secno < MAIN_SECS(sbi); secno++)
+			sanity_check_section_type(sbi, secno);
 	}
 
 	if (err)
