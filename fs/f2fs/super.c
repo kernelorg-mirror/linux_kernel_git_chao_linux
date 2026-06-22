@@ -5170,13 +5170,6 @@ try_onemore:
 		goto free_page_array_cache;
 	}
 
-	/*
-	 * Initialize ino entry info early so f2fs_drop_inode ->
-	 * f2fs_exist_written_data can safely take im->ino_lock if mount
-	 * fails after this point and triggers iput on cleanup.
-	 */
-	f2fs_init_ino_entry_info(sbi);
-
 	err = f2fs_get_valid_checkpoint(sbi);
 	if (err) {
 		f2fs_err(sbi, "Failed to get valid F2FS checkpoint");
@@ -5220,6 +5213,8 @@ try_onemore:
 	adjust_unusable_cap_perc(sbi);
 
 	f2fs_init_extent_cache_info(sbi);
+
+	f2fs_init_ino_entry_info(sbi);
 
 	f2fs_init_fsync_node_info(sbi);
 
