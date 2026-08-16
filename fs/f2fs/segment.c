@@ -2515,6 +2515,16 @@ static void __set_sit_entry_type(struct f2fs_sb_info *sbi, int type,
 		__mark_sit_entry_dirty(sbi, segno);
 }
 
+static void __set_section_sit_type(struct f2fs_sb_info *sbi, int type,
+					unsigned int segno, int modified)
+{
+	unsigned int i;
+	unsigned int start_segno = GET_START_SEG_FROM_SEC(sbi, GET_SEC_FROM_SEG(sbi, segno));
+
+	for (i = 0; i < SEGS_PER_SEC(sbi); i++)
+		__set_sit_entry_type(sbi, type, start_segno + i, modified);
+}
+
 static inline unsigned long long get_segment_mtime(struct f2fs_sb_info *sbi,
 								block_t blkaddr)
 {
@@ -3103,7 +3113,10 @@ static void reset_curseg(struct f2fs_sb_info *sbi, int type, int modified)
 		SET_SUM_TYPE(sum_footer, SUM_TYPE_DATA);
 	if (IS_NODESEG(seg_type))
 		SET_SUM_TYPE(sum_footer, SUM_TYPE_NODE);
-	__set_sit_entry_type(sbi, seg_type, curseg->segno, modified);
+	if (__is_large_section(sbi) && !(curseg->segno % SEGS_PER_SEC(sbi)))
+		__set_section_sit_type(sbi, seg_type, curseg->segno, modified);
+	else
+		__set_sit_entry_type(sbi, seg_type, curseg->segno, modified);
 }
 
 static unsigned int __get_next_segno(struct f2fs_sb_info *sbi, int type)
