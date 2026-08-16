@@ -752,6 +752,7 @@ static int f2fs_gc_pinned_control(struct inode *inode, int gc_type,
 {
 	if (!f2fs_is_pinned_file(inode))
 		return 0;
+	update_section_pinned(F2FS_I_SB(inode), segno, true);
 	if (gc_type != FG_GC)
 		return -EBUSY;
 	if (!f2fs_pin_section(F2FS_I_SB(inode), segno))
@@ -1949,6 +1950,10 @@ freed:
 				sbi->next_victim_seg[gc_type] =
 					(cur_segno + 1 < sec_end_segno) ?
 					cur_segno + 1 : NULL_SEGNO;
+
+			if (is_sbi_flag_set(sbi, SBI_GC_RANGE) &&
+					is_section_pinned(sbi, segno))
+				goto next_block;
 		}
 next_block:
 		f2fs_put_cache(sum_entry, false);
@@ -2187,8 +2192,10 @@ int f2fs_gc_range(struct f2fs_sb_info *sbi,
 		};
 		int err = 0;
 
-		if (lock)
+		if (lock) {
 			f2fs_down_write_trace(&sbi->gc_lock, &lc);
+			set_sbi_flag(sbi, SBI_GC_RANGE);
+		}
 
 		/*
 		 * avoid migrating empty section, as it can be allocated by
@@ -2199,6 +2206,12 @@ int f2fs_gc_range(struct f2fs_sb_info *sbi,
 
 		if (is_cursec(sbi, GET_SEC_FROM_SEG(sbi, segno)))
 			goto next;
+
+		if (is_section_pinned(sbi, segno)) {
+			if (!dry_run)
+				err = -EAGAIN;
+			goto next;
+		}
 
 		do_garbage_collect(sbi, segno, &gc_list, FG_GC, true, false);
 		put_gc_inode(&gc_list);
@@ -2219,13 +2232,18 @@ int f2fs_gc_range(struct f2fs_sb_info *sbi,
 		if (fatal_signal_pending(current))
 			err = -ERESTARTSYS;
 next:
-		if (lock)
+		if (lock) {
+			clear_sbi_flag(sbi, SBI_GC_RANGE);
 			f2fs_up_write_trace(&sbi->gc_lock, &lc);
+		}
 		if (err)
 			return err;
 		if (dry_run && dry_run_sections && !gc_secs)
 			return 0;
 	}
+
+	if (dry_run && dry_run_sections && gc_secs)
+		return -EAGAIN;
 
 	return 0;
 }

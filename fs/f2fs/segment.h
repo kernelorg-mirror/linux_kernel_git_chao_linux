@@ -192,7 +192,8 @@ struct seg_entry {
 	unsigned int type:6;		/* segment type like CURSEG_XXX_TYPE */
 	unsigned int valid_blocks:10;	/* # of valid blocks */
 	unsigned int ckpt_valid_blocks:10;	/* # of valid blocks last cp */
-	unsigned int padding:6;		/* padding */
+	unsigned int pinned:1;		/* indicate segment contains pinned file */
+	unsigned int padding:5;		/* padding */
 	unsigned char *cur_valid_map;	/* validity bitmap of blocks */
 	/*
 	 * # of valid blocks and the validity bitmap stored in the last
@@ -206,6 +207,7 @@ struct seg_entry {
 struct sec_entry {
 	unsigned int valid_blocks;	/* # of valid blocks in a section */
 	unsigned int ckpt_valid_blocks; /* # of valid blocks last cp in a section */
+	bool pinned;			/* indicate section contains pinned file */
 };
 
 #define MAX_SKIP_GC_COUNT			16
@@ -357,6 +359,23 @@ static inline unsigned int get_valid_blocks(struct f2fs_sb_info *sbi,
 		return get_sec_entry(sbi, segno)->valid_blocks;
 	else
 		return get_seg_entry(sbi, segno)->valid_blocks;
+}
+
+static inline bool is_section_pinned(struct f2fs_sb_info *sbi,
+					unsigned int segno)
+{
+	if (__is_large_section(sbi))
+		return get_sec_entry(sbi, segno)->pinned;
+	return get_seg_entry(sbi, segno)->pinned;
+}
+
+static inline void update_section_pinned(struct f2fs_sb_info *sbi,
+					unsigned int segno, bool pinned)
+{
+	if (__is_large_section(sbi))
+		get_sec_entry(sbi, segno)->pinned = pinned;
+	else
+		get_seg_entry(sbi, segno)->pinned = pinned;
 }
 
 static inline unsigned int get_ckpt_valid_blocks(struct f2fs_sb_info *sbi,

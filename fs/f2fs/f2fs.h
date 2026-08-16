@@ -1494,6 +1494,7 @@ enum {
 	SBI_IS_FREEZING,			/* freezefs is in process */
 	SBI_IS_WRITABLE,			/* remove ro mountoption transiently */
 	SBI_ENABLE_CHECKPOINT,			/* indicate it's during f2fs_enable_checkpoint() */
+	SBI_GC_RANGE,				/* indicate it's durring f2fs_gc_range() */
 	MAX_SBI_FLAG,
 };
 

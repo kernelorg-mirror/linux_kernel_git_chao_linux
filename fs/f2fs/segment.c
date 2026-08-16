@@ -2685,6 +2685,10 @@ static void update_sit_entry(struct f2fs_sb_info *sbi, block_t blkaddr, int del)
 
 	if (__is_large_section(sbi))
 		get_sec_entry(sbi, segno)->valid_blocks += del;
+
+	if (del < 0 && !get_valid_blocks(sbi, segno, true) &&
+					is_section_pinned(sbi, segno))
+		update_section_pinned(sbi, segno, false);
 }
 
 void f2fs_invalidate_blocks(struct f2fs_sb_info *sbi, block_t addr,
@@ -3173,6 +3177,7 @@ static int new_curseg(struct f2fs_sb_info *sbi, int type, bool new_sec)
 
 	curseg->next_segno = segno;
 	reset_curseg(sbi, type, 1);
+
 	curseg->alloc_type = LFS;
 	if (f2fs_need_rand_blk(sbi, type))
 		curseg->fragment_remained_chunk =
@@ -3967,6 +3972,7 @@ int f2fs_allocate_data_block(struct f2fs_sb_info *sbi,
 	unsigned long long old_mtime;
 	bool from_gc = (type == CURSEG_ALL_DATA_ATGC);
 	struct seg_entry *se = NULL;
+	unsigned segno;
 	bool segment_full = false;
 	int ret = 0;
 
@@ -3987,6 +3993,10 @@ int f2fs_allocate_data_block(struct f2fs_sb_info *sbi,
 		f2fs_bug_on(sbi, IS_NODESEG(se->type));
 	}
 	*new_blkaddr = NEXT_FREE_BLKADDR(sbi, curseg);
+
+	segno = GET_SEGNO(sbi, *new_blkaddr);
+	if (type == CURSEG_COLD_DATA_PINNED && !is_section_pinned(sbi, segno))
+		update_section_pinned(sbi, segno, true);
 
 	f2fs_bug_on(sbi, curseg->next_blkoff >= BLKS_PER_SEG(sbi));
 
