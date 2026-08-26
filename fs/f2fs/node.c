@@ -1798,16 +1798,8 @@ static bool __write_node_cache(struct f2fs_cached_block *entry,
 
 	f2fs_down_read_trace(&sbi->node_write, &lc);
 
-	/* This cache is already truncated */
-	if (unlikely(ni.blk_addr == NULL_ADDR)) {
-		f2fs_cache_clear_uptodate(entry);
-		f2fs_cache_update_tag(entry, F2FS_CACHE_TAG_DIRTY,
-					F2FS_CACHE_TAG_NONE);
-		dec_cache_count(entry->cache->sbi, F2FS_DIRTY_NODES);
-		f2fs_up_read_trace(&sbi->node_write, &lc);
-		f2fs_unlock_cache(entry);
-		return true;
-	}
+	/* NAT entry should never be NULL_ADDR at here */
+	f2fs_bug_on(sbi, ni.blk_addr == NULL_ADDR);
 
 	if (__is_valid_data_blkaddr(ni.blk_addr) &&
 		!f2fs_is_valid_blkaddr(sbi, ni.blk_addr,
