@@ -2299,6 +2299,57 @@ static inline void make_dentry_ptr_block(struct inode *inode,
 					SIZE_OF_DIR_ENTRY * entries;
 }
 
+static inline unsigned int f2fs_blocks_per_folio(struct f2fs_sb_info *sbi,
+						 const struct folio *folio)
+{
+	return folio_size(folio) >> sbi->log_blocksize;
+}
+
+static inline bool f2fs_has_subpage_blocks(struct f2fs_sb_info *sbi)
+{
+	return F2FS_BLKSIZE(sbi) < PAGE_SIZE;
+}
+
+static inline pgoff_t f2fs_folio_lblk(struct f2fs_sb_info *sbi,
+				      const struct folio *folio)
+{
+	return ((loff_t)folio->index << PAGE_SHIFT) >> sbi->log_blocksize;
+}
+
+static inline size_t f2fs_block_offset(struct f2fs_sb_info *sbi,
+				       unsigned int index)
+{
+	return (size_t)index << sbi->log_blocksize;
+}
+
+static inline pgoff_t f2fs_lblk_to_folio_index(struct f2fs_sb_info *sbi,
+					       pgoff_t index)
+{
+	return F2FS_BLK_TO_BYTES(sbi, index) >> PAGE_SHIFT;
+}
+
+static inline size_t f2fs_lblk_offset_in_folio(struct f2fs_sb_info *sbi,
+					       pgoff_t index)
+{
+	return F2FS_BLK_TO_BYTES(sbi, index) & (PAGE_SIZE - 1);
+}
+
+static inline void *f2fs_folio_lblk_address(struct f2fs_sb_info *sbi,
+					    struct folio *folio, pgoff_t index)
+{
+	return folio_address(folio) + f2fs_lblk_offset_in_folio(sbi, index);
+}
+
+static inline bool folio_has_ffs(const struct folio *folio)
+{
+	unsigned long private = (unsigned long)folio->private;
+
+	if (!private || (private & BIT(PAGE_PRIVATE_NOT_POINTER)) ||
+	    !folio->mapping)
+		return false;
+	return folio_size(folio) > F2FS_BLKSIZE(F2FS_F_SB(folio));
+}
+
 static inline struct f2fs_super_block *F2FS_RAW_SUPER(struct f2fs_sb_info *sbi)
 {
 	return (struct f2fs_super_block *)(sbi->raw_super);
