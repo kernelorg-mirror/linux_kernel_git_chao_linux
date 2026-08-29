@@ -4396,13 +4396,22 @@ static void init_sb_info(struct f2fs_sb_info *sbi)
 		le32_to_cpu(raw_super->log_sectors_per_block);
 	sbi->log_blocksize = le32_to_cpu(raw_super->log_blocksize);
 	sbi->blocksize = BIT(sbi->log_blocksize);
-	sbi->nat_entries_per_block = sbi->blocksize /
-		sizeof(struct f2fs_nat_entry);
+	sbi->sum_blocksize = sbi->blocksize;
+	sbi->entries_in_sum = sbi->sum_blocksize / 8;
+	sbi->sum_entry_size = SUMMARY_SIZE * sbi->entries_in_sum;
+	sbi->sum_journal_size = sbi->sum_blocksize - SUM_FOOTER_SIZE -
+		sbi->sum_entry_size;
+	sbi->nat_journal_entries = (sbi->sum_journal_size - sizeof(__le16)) /
+		sizeof(struct nat_journal_entry);
+	sbi->sit_journal_entries = (sbi->sum_journal_size - sizeof(__le16)) /
+		sizeof(struct sit_journal_entry);
 	sbi->addrs_per_inode = (sbi->blocksize - OFFSET_OF_END_OF_I_EXT -
 		SIZE_OF_I_NID - sizeof(struct node_footer)) / sizeof(__le32);
 	sbi->addrs_per_block = (sbi->blocksize -
 		sizeof(struct node_footer)) / sizeof(__le32);
 	sbi->nids_per_block = sbi->addrs_per_block;
+	sbi->nat_entries_per_block = sbi->blocksize /
+		sizeof(struct f2fs_nat_entry);
 	sbi->sit_entries_per_block = sbi->blocksize /
 		sizeof(struct f2fs_sit_entry);
 	sbi->orphans_per_block = (sbi->blocksize -
