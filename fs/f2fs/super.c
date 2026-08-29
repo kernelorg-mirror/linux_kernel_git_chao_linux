@@ -4078,11 +4078,13 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 		}
 	}
 
-	/* only support block_size equals to PAGE_SIZE */
-	if (le32_to_cpu(raw_super->log_blocksize) != PAGE_SHIFT) {
-		f2fs_info(sbi, "Invalid log_blocksize (%u), supports only %u",
+	/* Keep one or more filesystem blocks in each base-page folio. */
+	if (le32_to_cpu(raw_super->log_blocksize) <
+			F2FS_MIN_LOG_BLOCKSIZE ||
+			le32_to_cpu(raw_super->log_blocksize) > PAGE_SHIFT) {
+		f2fs_info(sbi, "Invalid log_blocksize (%u), supports %u..%u",
 			  le32_to_cpu(raw_super->log_blocksize),
-			  PAGE_SHIFT);
+			  F2FS_MIN_LOG_BLOCKSIZE, PAGE_SHIFT);
 		return -EFSCORRUPTED;
 	}
 
@@ -4104,7 +4106,7 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 	}
 	if (le32_to_cpu(raw_super->log_sectors_per_block) +
 		le32_to_cpu(raw_super->log_sectorsize) !=
-			F2FS_MAX_LOG_SECTOR_SIZE) {
+			le32_to_cpu(raw_super->log_blocksize)) {
 		f2fs_info(sbi, "Invalid log sectors per block(%u) log sectorsize(%u)",
 			  le32_to_cpu(raw_super->log_sectors_per_block),
 			  le32_to_cpu(raw_super->log_sectorsize));
