@@ -150,3 +150,15 @@ config F2FS_UNFAIR_RWSEM
 	help
 	  Use unfair rw_semaphore, if system configured IO priority by block
 	  cgroup.
+
+config F2FS_KUNIT_TESTS
+	tristate "KUnit tests for F2FS metadata cache" if !KUNIT_ALL_TESTS
+	depends on F2FS_FS && KUNIT
+	default KUNIT_ALL_TESTS
+	help
+	  This builds KUnit unit and concurrency tests for F2FS metadata cache.
+
+	  For more information on KUnit and unit tests in general, please refer
+	  to the KUnit documentation in Documentation/dev-tools/kunit/.
+
+	  If unsure, say N.
