@@ -1501,7 +1501,7 @@ static int f2fs_check_compression(struct fs_context *fc,
 }
 
 static int f2fs_check_opt_consistency(struct fs_context *fc,
-				      struct super_block *sb)
+						struct super_block *sb)
 {
 	struct f2fs_fs_context *ctx = fc->fs_private;
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
@@ -4530,7 +4530,7 @@ static int f2fs_report_zone_cb(struct blk_zone *zone, unsigned int idx,
 {
 	struct f2fs_report_zones_args *rz_args = data;
 	block_t unusable_blocks = (zone->len - zone->capacity) >>
-					F2FS_LOG_SECTORS_PER_BLOCK(rz_args->sbi);
+			F2FS_LOG_SECTORS_PER_BLOCK(rz_args->sbi);
 
 	if (zone->type == BLK_ZONE_TYPE_CONVENTIONAL)
 		return 0;

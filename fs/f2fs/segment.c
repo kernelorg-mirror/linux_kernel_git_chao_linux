@@ -1421,7 +1421,7 @@ static int __submit_discard_cmd(struct f2fs_sb_info *sbi,
 		atomic_inc(&dcc->issued_discard);
 
 		f2fs_update_iostat(sbi, NULL, FS_DISCARD_IO,
-			   len * F2FS_BLKSIZE(sbi));
+				   len * F2FS_BLKSIZE(sbi));
 
 		lstart += len;
 		start += len;
@@ -4753,7 +4753,7 @@ static void adjust_sit_entry_set(struct sit_entry_set *ses,
 }
 
 static void add_sit_entry(struct f2fs_sb_info *sbi, unsigned int segno,
-		struct list_head *head)
+		  struct list_head *head)
 {
 	struct sit_entry_set *ses;
 	unsigned int start_segno = f2fs_start_segno(sbi, segno);

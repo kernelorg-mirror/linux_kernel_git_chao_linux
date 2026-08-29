@@ -1856,10 +1856,10 @@ struct f2fs_sb_info {
 	unsigned int log_sectors_per_block;	/* log2 sectors per block */
 	unsigned int log_blocksize;		/* log2 block size */
 	unsigned int blocksize;			/* block size */
-	unsigned int nat_entries_per_block;	/* NAT entries in a block */
 	unsigned int addrs_per_inode;		/* addresses in an inode block */
-	unsigned int addrs_per_block;		/* addresses in a direct node block */
-	unsigned int nids_per_block;		/* node IDs in an indirect node block */
+	unsigned int addrs_per_block;		/* addresses in a direct node */
+	unsigned int nids_per_block;		/* node IDs in an indirect node */
+	unsigned int nat_entries_per_block;	/* NAT entries in a block */
 	unsigned int sit_entries_per_block;	/* SIT entries in a block */
 	unsigned int orphans_per_block;	/* orphan inodes in a block */
 	unsigned int dentries_per_block;	/* dentries in a block */
@@ -2258,8 +2258,8 @@ static inline struct f2fs_sb_info *F2FS_P_SB(struct page *page)
 	return F2FS_F_SB(page_folio(page));
 }
 
-#define SIT_ENTRY_PER_BLOCK(sbi)	((sbi)->sit_entries_per_block)
 #define NAT_ENTRY_PER_BLOCK(sbi)	((sbi)->nat_entries_per_block)
+#define SIT_ENTRY_PER_BLOCK(sbi)	((sbi)->sit_entries_per_block)
 #define DEF_ADDRS_PER_INODE_SBI(sbi)	((sbi)->addrs_per_inode)
 #define DEF_ADDRS_PER_BLOCK(sbi)	((sbi)->addrs_per_block)
 #define NIDS_PER_BLOCK(sbi)		((sbi)->nids_per_block)
