@@ -2123,6 +2123,15 @@ static void f2fs_put_super(struct super_block *sb)
 	}
 }
 
+static void f2fs_update_umount_locker(struct f2fs_sb_info *sbi, bool set)
+{
+	if (set)
+		sbi->umount_lock_holder = test_opt(sbi, MERGE_CHECKPOINT) ?
+			sbi->cprc_info.f2fs_issue_ckpt : current;
+	else
+		sbi->umount_lock_holder = NULL;
+}
+
 int f2fs_sync_fs(struct super_block *sb, int sync)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
@@ -2146,10 +2155,10 @@ int f2fs_sync_fs(struct super_block *sb, int sync)
 
 		/* freeze_super() holds s_umount for write during this sync pass. */
 		if (freeze_sync)
-			sbi->umount_lock_holder = current;
+			f2fs_update_umount_locker(sbi, true);
 		err = f2fs_issue_checkpoint(sbi);
 		if (freeze_sync)
-			sbi->umount_lock_holder = NULL;
+			f2fs_update_umount_locker(sbi, false);
 	}
 
 	return err;
@@ -2170,12 +2179,12 @@ static int f2fs_freeze(struct super_block *sb)
 	if (is_sbi_flag_set(sbi, SBI_IS_DIRTY))
 		return -EINVAL;
 
-	sbi->umount_lock_holder = current;
+	f2fs_update_umount_locker(sbi, true);
 
 	/* Let's flush checkpoints and stop the thread. */
 	f2fs_flush_ckpt_thread(sbi);
 
-	sbi->umount_lock_holder = NULL;
+	f2fs_update_umount_locker(sbi, false);
 
 	/* to avoid deadlock on f2fs_evict_inode->SB_FREEZE_FS */
 	set_sbi_flag(sbi, SBI_IS_FREEZING);
@@ -2854,7 +2863,7 @@ static int __f2fs_remount(struct fs_context *fc, struct super_block *sb)
 	org_mount_opt = sbi->mount_opt;
 	old_sb_flags = sb->s_flags;
 
-	sbi->umount_lock_holder = current;
+	f2fs_update_umount_locker(sbi, true);
 
 #ifdef CONFIG_QUOTA
 	org_mount_opt.s_jquota_fmt = F2FS_OPTION(sbi).s_jquota_fmt;
@@ -3097,7 +3106,7 @@ skip:
 	limit_reserve_root(sbi);
 	fc->sb_flags = (flags & ~SB_LAZYTIME) | (sb->s_flags & SB_LAZYTIME);
 
-	sbi->umount_lock_holder = NULL;
+	f2fs_update_umount_locker(sbi, false);
 	return 0;
 restore_checkpoint:
 	if (need_enable_checkpoint) {
@@ -3148,7 +3157,7 @@ restore_opts:
 	sb->s_flags = old_sb_flags;
 
 restore_holder:
-	sbi->umount_lock_holder = NULL;
+	f2fs_update_umount_locker(sbi, false);
 	return err;
 }
 
@@ -3512,9 +3521,9 @@ static int f2fs_quota_sync(struct super_block *sb, int type)
 {
 	int ret;
 
-	F2FS_SB(sb)->umount_lock_holder = current;
+	f2fs_update_umount_locker(F2FS_SB(sb), true);
 	ret = f2fs_do_quota_sync(sb, type);
-	F2FS_SB(sb)->umount_lock_holder = NULL;
+	f2fs_update_umount_locker(F2FS_SB(sb), false);
 	return ret;
 }
 
@@ -3533,7 +3542,7 @@ static int f2fs_quota_on(struct super_block *sb, int type, int format_id,
 	if (path->dentry->d_sb != sb)
 		return -EXDEV;
 
-	F2FS_SB(sb)->umount_lock_holder = current;
+	f2fs_update_umount_locker(F2FS_SB(sb), true);
 
 	err = f2fs_do_quota_sync(sb, type);
 	if (err)
@@ -3559,7 +3568,7 @@ static int f2fs_quota_on(struct super_block *sb, int type, int format_id,
 	inode_unlock(inode);
 	f2fs_mark_inode_dirty_sync(inode, false);
 out:
-	F2FS_SB(sb)->umount_lock_holder = NULL;
+	f2fs_update_umount_locker(F2FS_SB(sb), false);
 	return err;
 }
 
@@ -3594,7 +3603,7 @@ static int f2fs_quota_off(struct super_block *sb, int type)
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
 	int err;
 
-	F2FS_SB(sb)->umount_lock_holder = current;
+	f2fs_update_umount_locker(F2FS_SB(sb), true);
 
 	err = __f2fs_quota_off(sb, type);
 
@@ -3606,7 +3615,7 @@ static int f2fs_quota_off(struct super_block *sb, int type)
 	if (is_journalled_quota(sbi))
 		set_sbi_flag(sbi, SBI_QUOTA_NEED_REPAIR);
 
-	F2FS_SB(sb)->umount_lock_holder = NULL;
+	f2fs_update_umount_locker(F2FS_SB(sb), false);
 
 	return err;
 }
