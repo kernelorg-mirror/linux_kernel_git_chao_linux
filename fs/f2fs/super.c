@@ -2139,8 +2139,17 @@ int f2fs_sync_fs(struct super_block *sb, int sync)
 		return -EAGAIN;
 
 	if (sync) {
+		bool freeze_sync = sync && rwsem_is_locked(&sb->s_umount) &&
+				sb->s_writers.frozen == SB_FREEZE_PAGEFAULT;
+
 		stat_inc_cp_call_count(sbi, TOTAL_CALL);
+
+		/* freeze_super() holds s_umount for write during this sync pass. */
+		if (freeze_sync)
+			sbi->umount_lock_holder = current;
 		err = f2fs_issue_checkpoint(sbi);
+		if (freeze_sync)
+			sbi->umount_lock_holder = NULL;
 	}
 
 	return err;
