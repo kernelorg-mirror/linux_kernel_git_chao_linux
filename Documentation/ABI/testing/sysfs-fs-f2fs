@@ -1027,3 +1027,13 @@ Contact:	"Chao Yu" <chao@kernel.org>
 Description:	This is a writable entry to control writeback interval of
 		f2fs_writeback-x:y, the range is [100, 30000], by default the value
 		is 5000, unit is ms.
+
+What:		/sys/fs/f2fs/<disk>/max_atc_write_bio_vcnt
+Date:		September 2026
+Contact:	Chao Yu <chao@kernel.org>
+Description:	Every time a write operation completes f2fs_write_end_io() is
+		called. This function may be called from an atomic context,
+		e.g. from inside an interrupt handler. This attribute controls
+		the maximum size of a write bio that is completed in atomic
+		(atc) context. The default value for this attribute is UINT_MAX
+		which means that this functionality is disabled by default.
