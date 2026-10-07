@@ -398,7 +398,8 @@ static void f2fs_write_end_io(struct bio *bio)
 
 	sbi = bio->bi_private;
 
-	if (in_atomic() && bio->bi_iter.bi_size > sbi->max_atc_write_bio_size) {
+	if (in_atomic() && (bio->bi_iter.bi_size > sbi->max_atc_write_bio_size ||
+			F2FS_BIO(bio)->entry_cnt > sbi->max_atc_write_bio_entry_cnt)) {
 		struct work_struct *w;
 
 		w = &container_of(bio, struct f2fs_bio, bio)->work;
@@ -555,6 +556,7 @@ static struct bio *__bio_alloc(struct f2fs_io_info *fio, int npages)
 						fio->type, fio->temp);
 		bio->bi_write_stream = f2fs_io_type_to_write_stream(bdev, fio->type,
 								    fio->temp);
+		F2FS_BIO(bio)->entry_cnt = 0;
 	}
 	iostat_alloc_and_bind_ctx(sbi, bio, NULL);
 
@@ -867,6 +869,9 @@ int f2fs_submit_page_bio(struct f2fs_io_info *fio)
 			fio_folio->index, fio, GFP_NOIO);
 	bio_add_folio_nofail(bio, data_folio, folio_size(data_folio), 0);
 
+	if (!is_read_io(fio->op))
+		F2FS_BIO(bio)->entry_cnt++;
+
 	if (fio->io_wbc && !is_read_io(fio->op))
 		wbc_account_cgroup_owner(fio->io_wbc, fio_folio, PAGE_SIZE);
 
@@ -937,6 +942,7 @@ static void add_bio_entry(struct f2fs_sb_info *sbi, struct bio *bio,
 	bio_get(bio);
 
 	bio_add_folio_nofail(bio, folio, folio_size(folio), 0);
+	F2FS_BIO(bio)->entry_cnt++;
 
 	f2fs_down_write(&io->bio_list_lock);
 	list_add_tail(&be->list, &io->bio_list);
@@ -977,6 +983,7 @@ static int add_ipu_page(struct f2fs_io_info *fio, struct bio **bio,
 					fio_folio->mapping->host,
 					fio_folio->index, fio) &&
 			    bio_add_folio(*bio, folio, folio_size(folio), 0)) {
+				F2FS_BIO(*bio)->entry_cnt++;
 				ret = 0;
 				break;
 			}
@@ -1234,6 +1241,8 @@ alloc_new:
 		goto alloc_new;
 	}
 
+	F2FS_BIO(io->bio)->entry_cnt++;
+
 	if (fio->io_wbc)
 		wbc_account_cgroup_owner(fio->io_wbc, fio->folio,
 				folio_size(fio->folio));
@@ -1340,6 +1349,7 @@ alloc_new:
 	}
 
 	f2fs_bio_add_cache(fio, io->bio);
+	F2FS_BIO(io->bio)->entry_cnt++;
 
 	io->last_block_in_bio = fio->new_blkaddr;
 
