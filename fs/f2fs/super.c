@@ -4089,12 +4089,12 @@ static inline bool sanity_check_area_boundary(struct f2fs_sb_info *sbi,
 			res = "internally";
 		} else {
 			/*
-			 * __f2fs_commit_super() will access log_blocksize
+			 * f2fs_commit_super() will access log_blocksize
 			 * in SECTOR_FROM_BLOCK(), init it in advance.
 			 */
 			sbi->log_blocksize =
 				le32_to_cpu(raw_super->log_blocksize);
-			err = __f2fs_commit_super(sbi, folio, index, false);
+			err = f2fs_commit_super(sbi, false);
 			res = err ? "failed" : "done";
 		}
 		f2fs_info(sbi, "Fix alignment : %s, start(%u) end(%llu) block(%u)",
