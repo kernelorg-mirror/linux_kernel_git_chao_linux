@@ -417,6 +417,8 @@ go_write:
 	if (cp_reason) {
 		/* all the dirty node pages should be flushed for POR */
 		ret = f2fs_sync_fs(inode->i_sb, 1);
+		if (ret)
+			goto out;
 
 		/*
 		 * We've secured consistency through sync_fs. Following pino
@@ -2564,11 +2566,8 @@ int f2fs_do_shutdown(struct f2fs_sb_info *sbi, unsigned int flag,
 	case F2FS_GOING_DOWN_METASYNC:
 		/* do checkpoint only */
 		ret = f2fs_sync_fs(sb, 1);
-		if (ret) {
-			if (ret == -EIO)
-				ret = 0;
+		if (ret)
 			goto out;
-		}
 		f2fs_stop_checkpoint(sbi, false, STOP_CP_REASON_SHUTDOWN);
 		break;
 	case F2FS_GOING_DOWN_NOSYNC:
@@ -2584,8 +2583,6 @@ int f2fs_do_shutdown(struct f2fs_sb_info *sbi, unsigned int flag,
 		set_sbi_flag(sbi, SBI_IS_DIRTY);
 		/* do checkpoint only */
 		ret = f2fs_sync_fs(sb, 1);
-		if (ret == -EIO)
-			ret = 0;
 		goto out;
 	default:
 		ret = -EINVAL;
@@ -2613,6 +2610,13 @@ int f2fs_do_shutdown(struct f2fs_sb_info *sbi, unsigned int flag,
 
 	f2fs_update_time(sbi, REQ_TIME);
 out:
+	/*
+	 * If filesystem has already stopped, e.g. it was shutdown before,
+	 * bdev_freeze() or f2fs_sync_fs() will fail w/ -EIO, let's return
+	 * 0 for such case, as other filesystems did.
+	 */
+	if (ret == -EIO && f2fs_cp_error(sbi))
+		ret = 0;
 
 	trace_f2fs_shutdown(sbi, flag, ret);
 
