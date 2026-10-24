@@ -2566,6 +2566,7 @@ out_unlock:
 	fi->atomic_write_task = current;
 	stat_update_max_atomic_write(inode);
 	fi->atomic_write_cnt = 0;
+	fi->atomic_cow_written = false;
 out:
 	inode_unlock(inode);
 	mnt_drop_write_file(filp);

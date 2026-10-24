@@ -1542,10 +1542,10 @@ static struct bio *f2fs_grab_read_bio(struct inode *inode,
 }
 
 /* This can handle encryption stuffs */
-static void f2fs_submit_page_read(struct inode *inode, struct fsverity_info *vi,
-				  struct folio *folio, pgoff_t index,
-				  block_t blkaddr, blk_opf_t op_flags,
-				  bool for_write)
+void f2fs_submit_page_read(struct inode *inode, struct fsverity_info *vi,
+			   struct folio *folio, pgoff_t index,
+			   block_t blkaddr, blk_opf_t op_flags,
+			   bool for_write)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct bio *bio;
@@ -1575,8 +1575,8 @@ static void f2fs_submit_page_read(struct inode *inode, struct fsverity_info *vi,
  * so that iostat, trace, blk-crypto and post-read handling are all preserved.
  * The caller must have already allocated ffs for the folio.
  */
-static int f2fs_submit_page_read_sync(struct inode *inode, struct folio *folio,
-				      pgoff_t index, block_t blkaddr)
+int f2fs_submit_page_read_sync(struct inode *inode, struct folio *folio,
+			       pgoff_t index, block_t blkaddr)
 {
 	struct f2fs_folio_state *ffs =
 		(struct f2fs_folio_state *)folio->private;
@@ -3885,8 +3885,20 @@ got_it:
 	}
 	submitted = true;
 	set_inode_flag(inode, FI_APPEND_WRITE);
-	if (atomic_commit)
+	if (atomic_commit) {
+		struct f2fs_inode_info *fi = F2FS_I(inode);
+
 		folio_clear_f2fs_atomic(folio);
+		/*
+		 * f2fs_lock_op() is held here, so checkpoint version is
+		 * stable, record it for the oldest COW block.
+		 */
+		if (!fi->atomic_cow_written) {
+			fi->atomic_cow_cp_ver =
+				cur_cp_version(F2FS_CKPT(fio->sbi));
+			fi->atomic_cow_written = true;
+		}
+	}
 out_writepage:
 	f2fs_put_dnode(&dn);
 out:

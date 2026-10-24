@@ -306,7 +306,25 @@ static void __complete_revoke_list(struct inode *inode, struct list_head *head,
 		f2fs_do_truncate_blocks(inode, start_index * PAGE_SIZE, false);
 }
 
-static int __f2fs_commit_atomic_write(struct inode *inode)
+/*
+ * Note that f2fs_is_checkpointed_data() can not be used here, since
+ * ckpt_valid_map is updated at block allocation time to avoid SSR reusing
+ * newly allocated blocks, so it can't tell whether a block was allocated
+ * before or after the last checkpoint. Instead, check whether a checkpoint
+ * was done after the oldest COW block was written. Caller should hold
+ * f2fs_lock_op() to avoid racing with checkpoint.
+ */
+static bool f2fs_has_checkpointed_cow_blocks(struct inode *inode)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+	struct f2fs_inode_info *fi = F2FS_I(inode);
+
+	if (!fi->atomic_cow_written)
+		return false;
+	return fi->atomic_cow_cp_ver != cur_cp_version(F2FS_CKPT(sbi));
+}
+
+static int __f2fs_commit_atomic_write(struct inode *inode, bool *need_cow)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_inode_info *fi = F2FS_I(inode);
@@ -320,6 +338,18 @@ static int __f2fs_commit_atomic_write(struct inode *inode)
 	int ret = 0, i;
 
 	INIT_LIST_HEAD(&revoke_list);
+	*need_cow = false;
+
+	if (unlikely(f2fs_has_checkpointed_cow_blocks(inode))) {
+		/*
+		 * all COW blocks will be redirtied and rewritten, new
+		 * blocks will record current checkpoint version.
+		 */
+		fi->atomic_cow_written = false;
+		*need_cow = true;
+		ret = -EAGAIN;
+		goto out;
+	}
 
 	while (len) {
 		blen = min_t(pgoff_t, ADDRS_PER_BLOCK(cow_inode), len);
@@ -376,10 +406,12 @@ out:
 		f2fs_schedule_timeout_killable(DEFAULT_FAULT_TIMEOUT, true);
 
 	if (ret) {
-		sbi->revoked_atomic_block += fi->atomic_write_cnt;
+		if (!*need_cow)
+			sbi->revoked_atomic_block += fi->atomic_write_cnt;
 	} else {
 		sbi->committed_atomic_block += fi->atomic_write_cnt;
 		set_inode_flag(inode, FI_ATOMIC_COMMITTED);
+		fi->atomic_cow_written = false;
 
 		/*
 		 * inode may has no FI_ATOMIC_DIRTIED flag due to no write
@@ -397,23 +429,142 @@ out:
 	return ret;
 }
 
+static int f2fs_redirty_cow_blocks(struct inode *inode)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+	struct inode *cow_inode = F2FS_I(inode)->cow_inode;
+	struct dnode_of_data dn;
+	pgoff_t len = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
+	pgoff_t off = 0, blen, index;
+	int ret = 0, i;
+
+	while (len) {
+		blen = min_t(pgoff_t, ADDRS_PER_BLOCK(cow_inode), len);
+
+		set_new_dnode(&dn, cow_inode, NULL, NULL, 0);
+		ret = f2fs_get_dnode_of_data(&dn, off, LOOKUP_NODE_RA);
+		if (ret && ret != -ENOENT)
+			return ret;
+		if (ret == -ENOENT) {
+			if (dn.max_level == 0)
+				return 0;
+			goto next;
+		}
+
+		blen = min((pgoff_t)addrs_per_page(cow_inode,
+						   IS_INODE(sbi, dn.node_entry)),
+			   len);
+		index = off;
+		for (i = 0; i < blen; i++, dn.ofs_in_node++, index++) {
+			block_t blkaddr = f2fs_data_blkaddr(&dn);
+			struct folio *folio;
+
+			if (!__is_valid_data_blkaddr(blkaddr))
+				continue;
+			if (!f2fs_is_valid_blkaddr(sbi, blkaddr,
+						   DATA_GENERIC_ENHANCE_READ)) {
+				f2fs_put_dnode(&dn);
+				return -EFSCORRUPTED;
+			}
+
+			f2fs_put_dnode(&dn);
+
+retry_folio:
+			folio = f2fs_grab_cache_folio(inode->i_mapping,
+						      index, true);
+			if (IS_ERR(folio))
+				return PTR_ERR(folio);
+
+			if (folio_test_large(folio) &&
+			    !f2fs_ffs_find_or_alloc(folio)) {
+				f2fs_folio_put(folio, true);
+				return -ENOMEM;
+			}
+
+			f2fs_folio_wait_writeback(folio, true, true);
+
+			if (!f2fs_ffs_test_blk_uptodate(folio, index)) {
+				if (folio_test_large(folio)) {
+					ret = f2fs_submit_page_read_sync(inode,
+									 folio, index, blkaddr);
+					if (ret) {
+						f2fs_folio_put(folio, true);
+						return ret;
+					}
+				} else {
+					f2fs_submit_page_read(inode, NULL,
+							      folio, index, blkaddr,
+							      0, true);
+					folio_lock(folio);
+					if (unlikely(folio->mapping !=
+						     inode->i_mapping)) {
+						f2fs_folio_put(folio, true);
+						goto retry_folio;
+					}
+					if (unlikely(!folio_test_uptodate(folio))) {
+						f2fs_folio_put(folio, true);
+						return -EIO;
+					}
+					f2fs_folio_wait_writeback(folio, true,
+								  true);
+				}
+			}
+
+			if (folio_test_large(folio)) {
+				size_t foff = offset_in_folio(folio,
+							      (loff_t)index << PAGE_SHIFT);
+
+				f2fs_ffs_mark_subrange_dirty(folio, foff,
+							     PAGE_SIZE);
+			}
+			folio_mark_dirty(folio);
+			folio_set_f2fs_atomic(folio);
+			f2fs_folio_put(folio, true);
+
+			set_new_dnode(&dn, cow_inode, NULL, NULL, 0);
+			ret = f2fs_get_dnode_of_data(&dn, index, LOOKUP_NODE);
+			if (ret)
+				return ret;
+		}
+		f2fs_put_dnode(&dn);
+next:
+		off += blen;
+		len -= blen;
+	}
+
+	return 0;
+}
+
 int f2fs_commit_atomic_write(struct inode *inode)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct f2fs_inode_info *fi = F2FS_I(inode);
+	struct f2fs_inode_info *cfi = F2FS_I(fi->cow_inode);
 	struct f2fs_lock_context lc;
+	bool need_cow;
 	int err;
 
+retry:
 	err = filemap_write_and_wait_range(inode->i_mapping, 0, LLONG_MAX);
 	if (err)
 		return err;
 
 	f2fs_down_write(&fi->i_gc_rwsem[WRITE]);
+	f2fs_down_write_nested(&cfi->i_gc_rwsem[WRITE], SINGLE_DEPTH_NESTING);
 	f2fs_lock_op(sbi, &lc);
 
-	err = __f2fs_commit_atomic_write(inode);
+	err = __f2fs_commit_atomic_write(inode, &need_cow);
 
 	f2fs_unlock_op(sbi, &lc);
+	if (need_cow) {
+		err = f2fs_redirty_cow_blocks(inode);
+		f2fs_up_write(&cfi->i_gc_rwsem[WRITE]);
+		f2fs_up_write(&fi->i_gc_rwsem[WRITE]);
+		if (err)
+			return err;
+		goto retry;
+	}
+	f2fs_up_write(&cfi->i_gc_rwsem[WRITE]);
 	f2fs_up_write(&fi->i_gc_rwsem[WRITE]);
 
 	return err;
@@ -4421,11 +4572,6 @@ void f2fs_do_replace_block(struct f2fs_sb_info *sbi, struct f2fs_summary *sum,
 		update_sit_entry(sbi, old_blkaddr, -1);
 	}
 
-	locate_dirty_segment(sbi, GET_SEGNO(sbi, old_blkaddr));
-	locate_dirty_segment(sbi, GET_SEGNO(sbi, new_blkaddr));
-
-	locate_dirty_segment(sbi, old_cursegno);
-
 	if (recover_curseg) {
 		if (old_cursegno != curseg->segno) {
 			curseg->next_segno = old_cursegno;
@@ -4435,6 +4581,11 @@ void f2fs_do_replace_block(struct f2fs_sb_info *sbi, struct f2fs_summary *sum,
 		curseg->next_blkoff = old_blkoff;
 		curseg->alloc_type = old_alloc_type;
 	}
+
+	locate_dirty_segment(sbi, GET_SEGNO(sbi, old_blkaddr));
+	locate_dirty_segment(sbi, GET_SEGNO(sbi, new_blkaddr));
+
+	locate_dirty_segment(sbi, old_cursegno);
 
 out_unlock:
 	up_write(&sit_i->sentry_lock);

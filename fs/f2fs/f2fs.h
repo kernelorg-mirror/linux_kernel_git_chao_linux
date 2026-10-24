@@ -1010,6 +1010,12 @@ struct f2fs_inode_info {
 	atomic_t writeback;			/* count # of writeback thread */
 
 	unsigned int atomic_write_cnt;
+	/*
+	 * checkpoint version when the oldest not-yet-committed COW block was
+	 * written, valid only if atomic_cow_written is true
+	 */
+	unsigned long long atomic_cow_cp_ver;
+	bool atomic_cow_written;
 	loff_t original_i_size;		/* original i_size before atomic write */
 #ifdef CONFIG_FS_ENCRYPTION
 	struct fscrypt_inode_info *i_crypt_info; /* filesystem encryption info */
@@ -4454,6 +4460,12 @@ int f2fs_init_bio_entry_cache(void);
 void f2fs_destroy_bio_entry_cache(void);
 void f2fs_submit_read_bio(struct f2fs_sb_info *sbi, struct bio *bio,
 			  enum page_type type);
+void f2fs_submit_page_read(struct inode *inode, struct fsverity_info *vi,
+			   struct folio *folio, pgoff_t index,
+			   block_t blkaddr, blk_opf_t op_flags,
+			   bool for_write);
+int f2fs_submit_page_read_sync(struct inode *inode, struct folio *folio,
+			       pgoff_t index, block_t blkaddr);
 int f2fs_init_write_merge_io(struct f2fs_sb_info *sbi);
 void f2fs_submit_merged_write_cond(struct f2fs_sb_info *sbi,
 				struct inode *inode, struct folio *folio);
