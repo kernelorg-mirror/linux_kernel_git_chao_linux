@@ -1611,12 +1611,11 @@ static inline void f2fs_clear_bit(unsigned int nr, char *addr);
  * Layout of f2fs page.private:
  *
  * Layout A: lowest bit should be 1
- * | bit0 = 1 | bit1 | bit2 | ... | bit MAX | private data .... |
+ * | bit0 = 1 | bit1 | bit2 | ... | bit MAX-1 |
  * bit 0	PAGE_PRIVATE_NOT_POINTER
  * bit 1	PAGE_PRIVATE_ONGOING_MIGRATION
  * bit 2	PAGE_PRIVATE_REF_RESOURCE
  * bit 3	PAGE_PRIVATE_ATOMIC_WRITE
- * bit 4-	f2fs private data
  *
  * Layout B: lowest bit should be 0
  * page.private is a wrapped pointer.
@@ -2823,25 +2822,6 @@ PAGE_PRIVATE_SET_FUNC(atomic, ATOMIC_WRITE);
 PAGE_PRIVATE_CLEAR_FUNC(reference, REF_RESOURCE);
 PAGE_PRIVATE_CLEAR_FUNC(gcing, ONGOING_MIGRATION);
 PAGE_PRIVATE_CLEAR_FUNC(atomic, ATOMIC_WRITE);
-
-static inline unsigned long folio_get_f2fs_data(struct folio *folio)
-{
-	unsigned long data = (unsigned long)folio->private;
-
-	if (!test_bit(PAGE_PRIVATE_NOT_POINTER, &data))
-		return 0;
-	return data >> PAGE_PRIVATE_MAX;
-}
-
-static inline void folio_set_f2fs_data(struct folio *folio, unsigned long data)
-{
-	data = (1UL << PAGE_PRIVATE_NOT_POINTER) | (data << PAGE_PRIVATE_MAX);
-
-	if (!folio_test_private(folio))
-		folio_attach_private(folio, (void *)data);
-	else
-		folio->private = (void *)((unsigned long)folio->private | data);
-}
 
 static inline void dec_valid_block_count(struct f2fs_sb_info *sbi,
 						struct inode *inode,
