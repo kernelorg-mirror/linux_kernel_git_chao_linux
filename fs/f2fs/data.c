@@ -4680,6 +4680,16 @@ out:
 		if (f2fs_ffs_clear_subrange_dirty_and_test(folio, 0,
 						clear_len) || err) {
 			folio_redirty_for_writepage(wbc, folio);
+			/*
+			 * The folio will be unlocked with both PG_dirty and
+			 * PG_writeback set.  Submit its cached bio now,
+			 * otherwise a WB_SYNC_ALL writer may lock it and wait
+			 * in the generic folio_prepare_writeback(), which
+			 * does not flush f2fs's cached bio, until we reach
+			 * the final f2fs_submit_merged_write_cond().
+			 */
+			if (folio_submitted)
+				f2fs_submit_merged_write_cond(sbi, NULL, folio);
 		} else if (!f2fs_folio_has_ffs(folio)) {
 			inode_dec_dirty_block(inode);
 		}
