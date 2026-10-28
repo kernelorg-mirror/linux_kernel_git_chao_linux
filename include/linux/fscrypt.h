@@ -384,6 +384,7 @@ int fscrypt_ioctl_set_policy(struct file *filp, const void __user *arg);
 int fscrypt_ioctl_get_policy(struct file *filp, void __user *arg);
 int fscrypt_ioctl_get_policy_ex(struct file *filp, void __user *arg);
 int fscrypt_ioctl_get_nonce(struct file *filp, void __user *arg);
+int fscrypt_check_permitted_context(struct inode *parent, struct inode *child);
 int fscrypt_has_permitted_context(struct inode *parent, struct inode *child);
 int fscrypt_context_for_new_inode(void *ctx, struct inode *inode);
 int fscrypt_set_context(struct inode *inode, void *fs_data);
@@ -573,6 +574,12 @@ static inline int fscrypt_ioctl_get_policy_ex(struct file *filp,
 }
 
 static inline int fscrypt_ioctl_get_nonce(struct file *filp, void __user *arg)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int fscrypt_check_permitted_context(struct inode *parent,
+						  struct inode *child)
 {
 	return -EOPNOTSUPP;
 }

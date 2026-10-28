@@ -69,12 +69,11 @@ int fscrypt_file_open(struct inode *inode, struct file *filp)
 	rcu_read_unlock();
 
 	dentry_parent = dget_parent(dentry);
-	if (!fscrypt_has_permitted_context(d_inode(dentry_parent), inode)) {
+	err = fscrypt_check_permitted_context(d_inode(dentry_parent), inode);
+	if (err == -EPERM)
 		fscrypt_warn(inode,
 			     "Inconsistent encryption context (parent directory: %llu)",
 			     d_inode(dentry_parent)->i_ino);
-		err = -EPERM;
-	}
 	dput(dentry_parent);
 	return err;
 }

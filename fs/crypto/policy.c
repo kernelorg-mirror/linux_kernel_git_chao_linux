@@ -642,8 +642,8 @@ int fscrypt_ioctl_get_nonce(struct file *filp, void __user *arg)
 EXPORT_SYMBOL_GPL(fscrypt_ioctl_get_nonce);
 
 /**
- * fscrypt_has_permitted_context() - is a file's encryption policy permitted
- *				     within its directory?
+ * fscrypt_check_permitted_context() - is a file's encryption policy permitted
+ *				       within its directory?
  *
  * @parent: inode for parent directory
  * @child: inode for file being looked up, opened, or linked into @parent
@@ -658,9 +658,11 @@ EXPORT_SYMBOL_GPL(fscrypt_ioctl_get_nonce);
  * malicious offline violations of this constraint, while the link and rename
  * checks are needed to prevent online violations of this constraint.
  *
- * Return: 1 if permitted, 0 if forbidden.
+ * Return: 0 if permitted, -EPERM if forbidden, or another negative errno if
+ * the encryption policies couldn't be retrieved, e.g. -ENOMEM.  Callers must
+ * deny access on any non-zero return value.
  */
-int fscrypt_has_permitted_context(struct inode *parent, struct inode *child)
+int fscrypt_check_permitted_context(struct inode *parent, struct inode *child)
 {
 	union fscrypt_policy parent_policy, child_policy;
 	int err, err1, err2;
@@ -668,15 +670,15 @@ int fscrypt_has_permitted_context(struct inode *parent, struct inode *child)
 	/* No restrictions on file types which are never encrypted */
 	if (!S_ISREG(child->i_mode) && !S_ISDIR(child->i_mode) &&
 	    !S_ISLNK(child->i_mode))
-		return 1;
+		return 0;
 
 	/* No restrictions if the parent directory is unencrypted */
 	if (!IS_ENCRYPTED(parent))
-		return 1;
+		return 0;
 
 	/* Encrypted directories must not contain unencrypted files */
 	if (!IS_ENCRYPTED(child))
-		return 0;
+		return -EPERM;
 
 	/*
 	 * Both parent and child are encrypted, so verify they use the same
@@ -690,15 +692,17 @@ int fscrypt_has_permitted_context(struct inode *parent, struct inode *child)
 	 * such access is even possible), given that any attempted access
 	 * already causes a fscrypt_context retrieval and keyring search.
 	 *
-	 * In any case, if an unexpected error occurs, fall back to "forbidden".
+	 * If the policies can't be retrieved, e.g. due to -ENOMEM, return the
+	 * error rather than -EPERM, so that a transient failure is not reported
+	 * as an encryption policy violation.  Access is denied either way.
 	 */
 
 	err = fscrypt_get_encryption_info(parent, true);
 	if (err)
-		return 0;
+		return err;
 	err = fscrypt_get_encryption_info(child, true);
 	if (err)
-		return 0;
+		return err;
 
 	err1 = fscrypt_get_policy(parent, &parent_policy);
 	err2 = fscrypt_get_policy(child, &child_policy);
@@ -709,12 +713,35 @@ int fscrypt_has_permitted_context(struct inode *parent, struct inode *child)
 	 * policy can be deleted.
 	 */
 	if (err1 == -EINVAL && err2 == -EINVAL)
-		return 1;
-
-	if (err1 || err2)
 		return 0;
 
-	return fscrypt_policies_equal(&parent_policy, &child_policy);
+	/* Missing or unrecognized encryption context is a real violation */
+	if (err1 == -EINVAL || err1 == -ENODATA ||
+	    err2 == -EINVAL || err2 == -ENODATA)
+		return -EPERM;
+
+	if (err1 || err2)
+		return err1 ?: err2;
+
+	if (!fscrypt_policies_equal(&parent_policy, &child_policy))
+		return -EPERM;
+	return 0;
+}
+EXPORT_SYMBOL(fscrypt_check_permitted_context);
+
+/**
+ * fscrypt_has_permitted_context() - is a file's encryption policy permitted
+ *				     within its directory?
+ * @parent: inode for parent directory
+ * @child: inode for file being looked up, opened, or linked into @parent
+ *
+ * Same as fscrypt_check_permitted_context(), but w/o the error code.
+ *
+ * Return: 1 if permitted, 0 if forbidden or on error.
+ */
+int fscrypt_has_permitted_context(struct inode *parent, struct inode *child)
+{
+	return fscrypt_check_permitted_context(parent, child) == 0;
 }
 EXPORT_SYMBOL(fscrypt_has_permitted_context);
 
