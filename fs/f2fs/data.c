@@ -4507,6 +4507,7 @@ static int f2fs_write_cache_folios(struct address_space *mapping,
 		struct f2fs_folio_state *ffs = NULL;
 		u64 isize;
 		size_t poff;
+		size_t clear_len;
 		pgoff_t end_index;
 		bool verity_in_progress;
 		int folio_submitted = 0;
@@ -4657,9 +4658,17 @@ out:
 		 * partially written back), or if the writeback failed, the
 		 * folio must stay dirty so that the remaining subranges are
 		 * written back later.
+		 *
+		 * On success, clear dirty bits of the whole folio rather than
+		 * up to isize: subpages beyond EOF can still carry dirty bits
+		 * (e.g. fill_zero() w/ FALLOC_FL_KEEP_SIZE, BG_GC on blocks
+		 * beyond EOF, or f2fs_ffs_find_or_alloc() on a dirty folio),
+		 * they will never be written back, and would keep the folio
+		 * redirtied forever.
 		 */
+		clear_len = err ? pos - folio_pos(folio) : folio_size(folio);
 		if (f2fs_ffs_clear_subrange_dirty_and_test(folio, 0,
-					(err ? pos : end_pos) - folio_pos(folio)) || err)
+						clear_len) || err)
 			folio_redirty_for_writepage(wbc, folio);
 		else if (!f2fs_folio_has_ffs(folio))
 			inode_dec_dirty_block(inode);
