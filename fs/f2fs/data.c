@@ -5729,6 +5729,9 @@ static int f2fs_migrate_blocks(struct inode *inode, block_t start_blk,
 				goto done;
 			}
 
+			f2fs_ffs_mark_subrange_dirty(folio,
+				offset_in_folio(folio, (loff_t)blkidx << PAGE_SHIFT),
+				PAGE_SIZE);
 			folio_mark_dirty(folio);
 			f2fs_folio_put(folio, true);
 		}
