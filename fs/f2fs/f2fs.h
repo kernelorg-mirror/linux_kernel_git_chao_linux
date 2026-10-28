@@ -1652,13 +1652,6 @@ enum {
 	PAGE_PRIVATE_MAX
 };
 
-static inline bool f2fs_folio_has_ffs(const struct folio *folio)
-{
-	unsigned long private = (unsigned long)folio->private;
-
-	return folio_test_large(folio) && private;
-}
-
 /* For compression */
 enum compress_algorithm_type {
 	COMPRESS_LZO,
@@ -2293,6 +2286,24 @@ static inline struct f2fs_sb_info *F2FS_M_SB(struct address_space *mapping)
 static inline struct f2fs_sb_info *F2FS_F_SB(const struct folio *folio)
 {
 	return F2FS_M_SB(folio->mapping);
+}
+
+static inline bool f2fs_folio_has_ffs(const struct folio *folio)
+{
+	unsigned long private = (unsigned long)folio->private;
+
+	if (!folio_test_large(folio) || !private)
+		return false;
+
+	/*
+	 * A large folio should always carry f2fs_folio_state rather than
+	 * non-pointer private flags at its folio->private.
+	 */
+	if (unlikely(test_bit(PAGE_PRIVATE_NOT_POINTER, &private))) {
+		f2fs_bug_on(F2FS_F_SB(folio), 1);
+		return false;
+	}
+	return true;
 }
 
 #define SIT_ENTRY_PER_BLOCK(sbi)	((sbi)->sit_entries_per_block)
