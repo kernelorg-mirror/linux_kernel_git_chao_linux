@@ -1606,6 +1606,17 @@ retry:
 				/* migrate this block in later GC */
 				folio_clear_f2fs_gcing(folio);
 			}
+		} else if (large && folio_test_dirty(folio)) {
+			/*
+			 * The folio is left both dirty and under writeback,
+			 * submit the cached bio before unlocking it, otherwise
+			 * a WB_SYNC_ALL writer may lock the folio and wait on
+			 * its writeback in folio_prepare_writeback(), while we
+			 * are blocked on folio_lock() for the next block of the
+			 * same folio, before the bio is submitted.
+			 */
+			f2fs_submit_merged_write_cond(F2FS_I_SB(inode), NULL,
+							folio);
 		}
 	}
 out:
