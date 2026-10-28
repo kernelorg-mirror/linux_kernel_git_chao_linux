@@ -539,12 +539,15 @@ static struct dentry *f2fs_lookup(struct inode *dir, struct dentry *dentry,
 	}
 
 	if (IS_ENCRYPTED(dir) &&
-	    (S_ISDIR(inode->i_mode) || S_ISLNK(inode->i_mode)) &&
-	    !fscrypt_has_permitted_context(dir, inode)) {
-		f2fs_warn(F2FS_I_SB(inode), "Inconsistent encryption contexts: %llu/%llu",
-			  dir->i_ino, inode->i_ino);
-		err = -EPERM;
-		goto out_iput;
+	    (S_ISDIR(inode->i_mode) || S_ISLNK(inode->i_mode))) {
+		err = fscrypt_check_permitted_context(dir, inode);
+		if (err) {
+			if (err == -EPERM)
+				f2fs_warn(F2FS_I_SB(inode),
+					"Inconsistent encryption contexts: %llu/%llu",
+					dir->i_ino, inode->i_ino);
+			goto out_iput;
+		}
 	}
 out_splice:
 	if (IS_ENABLED(CONFIG_UNICODE) && !inode && IS_CASEFOLDED(dir)) {
