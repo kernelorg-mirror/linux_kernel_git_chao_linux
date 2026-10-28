@@ -4668,10 +4668,19 @@ out:
 		 */
 		clear_len = err ? pos - folio_pos(folio) : folio_size(folio);
 		if (f2fs_ffs_clear_subrange_dirty_and_test(folio, 0,
-						clear_len) || err)
+						clear_len) || err) {
 			folio_redirty_for_writepage(wbc, folio);
-		else if (!f2fs_folio_has_ffs(folio))
+			/*
+			 * The folio stays both dirty and under writeback,
+			 * submit its cached bio, otherwise a WB_SYNC_ALL
+			 * writer may wait on its writeback in
+			 * folio_prepare_writeback() forever.
+			 */
+			if (folio_submitted)
+				f2fs_submit_merged_write_cond(sbi, NULL, folio);
+		} else if (!f2fs_folio_has_ffs(folio)) {
 			inode_dec_dirty_block(inode);
+		}
 
 		/*
 		 * Release the bias taken above and we end writeback here if
