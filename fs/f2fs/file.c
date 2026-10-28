@@ -235,6 +235,19 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 		goto out_sem;
 	}
 
+	/*
+	 * The whole valid range of a large folio will be dirtied below, so
+	 * all of its subpages must be uptodate.  A racing COLLAPSE_RANGE,
+	 * INSERT_RANGE or punch hole can invalidate part of the folio via
+	 * f2fs_invalidate_folio() while it is unlocked, let's return
+	 * VM_FAULT_NOPAGE to refault it.
+	 */
+	if (folio_test_large(folio) && !folio_test_uptodate(folio)) {
+		folio_unlock(folio);
+		err = -EFAULT;
+		goto out_sem;
+	}
+
 	if (folio_test_large(folio) && !f2fs_ffs_find_or_alloc(folio)) {
 		folio_unlock(folio);
 		err = -ENOMEM;
