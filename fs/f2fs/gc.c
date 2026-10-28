@@ -1594,9 +1594,17 @@ retry:
 				goto retry;
 			}
 			if (is_dirty) {
+				/*
+				 * Keep gcing flag for redirtied folio, so that
+				 * it can be guaranteed by checkpoint.
+				 */
 				if (large)
 					f2fs_ffs_mark_subrange_dirty(folio, foff, PAGE_SIZE);
 				folio_mark_dirty(folio);
+				folio_set_f2fs_gcing(folio);
+			} else if (!f2fs_ffs_has_dirty_subpage(folio)) {
+				/* migrate this block in later GC */
+				folio_clear_f2fs_gcing(folio);
 			}
 		}
 	}

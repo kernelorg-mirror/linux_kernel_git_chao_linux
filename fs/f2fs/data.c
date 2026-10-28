@@ -362,7 +362,7 @@ static void f2fs_cache_write_end_bio(struct bio *bio)
 	bio_put(bio);
 }
 
-static bool f2fs_ffs_has_dirty_subpage(struct folio *folio)
+bool f2fs_ffs_has_dirty_subpage(struct folio *folio)
 {
 	struct f2fs_folio_state *ffs;
 	unsigned long flags;
@@ -3772,11 +3772,8 @@ int f2fs_do_write_data_page(struct f2fs_io_info *fio)
 		return -EINVAL;
 
 	/* Deadlock due to between page->lock and f2fs_lock_op */
-	if (fio->need_lock == LOCK_REQ && !f2fs_trylock_op(fio->sbi, &lc)) {
-		if (!f2fs_ffs_has_dirty_subpage(folio))
-			folio_clear_f2fs_gcing(folio);
+	if (fio->need_lock == LOCK_REQ && !f2fs_trylock_op(fio->sbi, &lc))
 		return -EAGAIN;
-	}
 
 	err = f2fs_get_dnode_of_data(&dn, F2FS_FIO_LBLK(fio),
 				     LOOKUP_NODE);
@@ -3788,6 +3785,8 @@ int f2fs_do_write_data_page(struct f2fs_io_info *fio)
 	/* This page is already truncated */
 	if (fio->old_blkaddr == NULL_ADDR) {
 		f2fs_clear_truncated_page_state(folio, fio->folio_offset);
+		if (!f2fs_ffs_has_dirty_subpage(folio))
+			folio_clear_f2fs_gcing(folio);
 		goto out_writepage;
 	}
 got_it:
@@ -3865,13 +3864,13 @@ out_writepage:
 out:
 	if (fio->need_lock == LOCK_REQ)
 		f2fs_unlock_op(fio->sbi, &lc);
-	if (!submitted) {
-		if (pending_added) {
-			f2fs_ffs_put_write_pending(folio, 1);
-		} else if (!f2fs_ffs_has_dirty_subpage(folio)) {
-			folio_clear_f2fs_gcing(folio);
-		}
-	}
+	/*
+	 * Do not clear gcing flag on failure here: the caller will redirty
+	 * the folio and keep the flag so that it can be guaranteed by
+	 * checkpoint, or drop the flag by itself, e.g. move_data_page().
+	 */
+	if (!submitted && pending_added)
+		f2fs_ffs_put_write_pending(folio, 1);
 	return err;
 }
 
