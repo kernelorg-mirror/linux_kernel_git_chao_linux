@@ -4941,16 +4941,14 @@ static int redirty_blocks(struct inode *inode, pgoff_t page_idx, int len)
 			 */
 			if (!f2fs_ffs_find_or_alloc(folio)) {
 				ret = -ENOMEM;
-				folio_unlock(folio);
-				folio_put_refs(folio, 2);
-				redirty_idx = folio_next_index(folio);
-				continue;
+				goto next;
 			}
 			f2fs_ffs_mark_subrange_dirty(folio, off, dlen);
 		}
 
 		folio_mark_dirty(folio);
 		folio_set_f2fs_gcing(folio);
+next:
 		redirty_idx = folio_next_index(folio);
 		folio_unlock(folio);
 		folio_put_refs(folio, 2);
