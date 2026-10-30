@@ -1521,6 +1521,20 @@ static bool __need_flush_quota(struct f2fs_sb_info *sbi)
 }
 
 /*
+ * Whether quota was updated after the last __need_flush_quota() check, w/o
+ * clearing SBI_QUOTA_NEED_FLUSH.
+ */
+static bool __quota_flush_pending(struct f2fs_sb_info *sbi)
+{
+	if (!is_journalled_quota(sbi))
+		return false;
+	if (is_sbi_flag_set(sbi, SBI_QUOTA_SKIP_FLUSH) ||
+	    is_sbi_flag_set(sbi, SBI_QUOTA_NEED_REPAIR))
+		return false;
+	return is_sbi_flag_set(sbi, SBI_QUOTA_NEED_FLUSH);
+}
+
+/*
  * Freeze all the FS-operations for checkpoint.
  */
 static int block_operations(struct f2fs_sb_info *sbi)
@@ -1572,7 +1586,15 @@ retry_flush_dents:
 	 */
 	f2fs_down_write(&sbi->node_change);
 
-	if (get_nr_caches(sbi, F2FS_DIRTY_IMETA)) {
+	/*
+	 * Block allocation w/ F2FS_GET_BLOCK_PRE_AIO only holds node_change
+	 * rather than cp_rwsem, so it can update quota and i_blocks after the
+	 * quota flush check above. If the inode was then synced to its node
+	 * block, F2FS_DIRTY_IMETA can't tell, and we would persist the new
+	 * i_blocks w/ stale quota. Recheck it now that node_change is held.
+	 */
+	if (get_nr_caches(sbi, F2FS_DIRTY_IMETA) ||
+	    __quota_flush_pending(sbi)) {
 		f2fs_up_write(&sbi->node_change);
 		f2fs_unlock_all(sbi);
 		err = f2fs_sync_inode_meta(sbi);
