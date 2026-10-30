@@ -1861,7 +1861,13 @@ static int f2fs_zero_range(struct inode *inode, loff_t offset, loff_t len,
 	if (ret)
 		return ret;
 
-	ret = f2fs_zero_post_eof_page(inode, offset + len, true, false);
+	/*
+	 * If i_size will be extended, zero post-EOF data in the last page
+	 * and write it back, so that stale data in range of [i_size, offset)
+	 * won't be exposed after i_size is extended.
+	 */
+	ret = f2fs_zero_post_eof_page(inode, offset + len, true,
+				      !(mode & FALLOC_FL_KEEP_SIZE));
 	if (ret)
 		return ret;
 
@@ -3410,6 +3416,17 @@ static int f2fs_move_file_range(struct file *file_in, loff_t pos_in,
 	ret = f2fs_convert_inline_inode(dst);
 	if (ret)
 		goto out_unlock;
+
+	/*
+	 * If blocks are moved beyond dst's EOF, zero post-EOF data in dst's
+	 * last page and write it back, so that stale data in range of
+	 * [i_size, pos_out) won't be exposed after i_size is extended.
+	 */
+	if (pos_out > dst_osize) {
+		ret = f2fs_zero_post_eof_page(dst, pos_out, true, true);
+		if (ret)
+			goto out_unlock;
+	}
 
 	/* write out all dirty pages from offset */
 	ret = filemap_write_and_wait_range(src->i_mapping,
