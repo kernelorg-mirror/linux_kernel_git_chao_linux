@@ -95,7 +95,14 @@ static int f2fs_zero_post_eof_page(struct inode *inode,
 	if (lock)
 		filemap_invalidate_unlock(inode->i_mapping);
 
-	if (!writeback)
+	/*
+	 * For atomic file, the last page loses its atomic flag once it's
+	 * written back to cow_inode, zeroing and writing it back here would
+	 * write uncommitted atomic data to the original inode, and reserve
+	 * block for the original inode outside the transaction, skip it,
+	 * atomic data will be committed from cow_inode.
+	 */
+	if (!writeback || f2fs_is_atomic_file(inode))
 		return 0;
 
 	return do_zero_post_eof_page(inode, new_size, true);
