@@ -39,7 +39,12 @@
 static int fill_zero(struct inode *inode, pgoff_t index,
 					loff_t start, loff_t len);
 
-static int do_zero_post_eof_page(struct inode *inode, loff_t new_size)
+/*
+ * Zero post-EOF data in range of [i_size, new_size) of the last page, if
+ * @sync is true, write it back and wait for its completion.
+ */
+static int do_zero_post_eof_page(struct inode *inode, loff_t new_size,
+				 bool sync)
 {
 	loff_t old_size = i_size_read(inode);
 	unsigned int offset, len;
@@ -64,7 +69,7 @@ static int do_zero_post_eof_page(struct inode *inode, loff_t new_size)
 	}
 
 	err = fill_zero(inode, index, offset, len);
-	if (err)
+	if (err || !sync)
 		return err;
 	return filemap_write_and_wait_range(inode->i_mapping,
 				old_size, old_size + len - 1);
@@ -78,6 +83,11 @@ static int f2fs_zero_post_eof_page(struct inode *inode,
 	if (old_size >= new_size)
 		return 0;
 
+	/* nothing to drop in pagecache, and nothing to zero on disk */
+	if (mapping_empty(inode->i_mapping) &&
+	    (!writeback || !(old_size & (PAGE_SIZE - 1))))
+		return 0;
+
 	if (lock)
 		filemap_invalidate_lock(inode->i_mapping);
 	/* zero or drop pages only in range of [old_size, new_size] */
@@ -88,7 +98,7 @@ static int f2fs_zero_post_eof_page(struct inode *inode,
 	if (!writeback)
 		return 0;
 
-	return do_zero_post_eof_page(inode, new_size);
+	return do_zero_post_eof_page(inode, new_size, true);
 }
 
 static vm_fault_t f2fs_filemap_fault(struct vm_fault *vmf)
@@ -870,6 +880,34 @@ truncate_out:
 	return 0;
 }
 
+/*
+ * When shrinking i_size to @new_size which is not page aligned, zero
+ * post-EOF data of the new last page and write it back before i_size is
+ * updated, so that checkpoint can never persist new i_size w/ stale data
+ * beyond it on disk, then after power-cut, truncated data won't be exposed
+ * when i_size is extended by a write which doesn't zero post-EOF data,
+ * e.g. append write.
+ *
+ * Inline data beyond i_size is zeroed in inode page and persisted w/
+ * i_size, compressed file still zeroes post-EOF data synchronously when
+ * extending i_size, and atomic file commits data from cow_inode, so skip
+ * them.
+ */
+static int f2fs_zero_tail_on_shrink(struct inode *inode, loff_t new_size)
+{
+	loff_t end = round_up(new_size, PAGE_SIZE) - 1;
+	int err;
+
+	if (!(new_size & (PAGE_SIZE - 1)) || f2fs_has_inline_data(inode) ||
+	    f2fs_compressed_file(inode) || f2fs_is_atomic_file(inode))
+		return 0;
+
+	err = truncate_partial_data_page(inode, new_size, false);
+	if (err)
+		return err;
+	return filemap_write_and_wait_range(inode->i_mapping, new_size, end);
+}
+
 int f2fs_do_truncate_blocks(struct inode *inode, u64 from, bool lock)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
@@ -1260,12 +1298,13 @@ int f2fs_setattr(const struct mnt_idmap *idmap, struct dentry *dentry,
 		f2fs_down_write(&fi->i_gc_rwsem[WRITE]);
 		filemap_invalidate_lock(inode->i_mapping);
 
-		if (attr->ia_size > old_size) {
+		if (attr->ia_size > old_size)
 			err = f2fs_zero_post_eof_page(inode,
 				attr->ia_size, false, true);
-			if (err)
-				goto err_out;
-		}
+		else if (attr->ia_size < old_size)
+			err = f2fs_zero_tail_on_shrink(inode, attr->ia_size);
+		if (err)
+			goto err_out;
 		truncate_setsize(inode, attr->ia_size);
 
 		if (attr->ia_size <= old_size)
@@ -5504,6 +5543,7 @@ static ssize_t f2fs_write_checks(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *file = iocb->ki_filp;
 	struct inode *inode = file_inode(file);
+	loff_t old_size;
 	ssize_t count;
 	int err;
 
@@ -5530,10 +5570,45 @@ static ssize_t f2fs_write_checks(struct kiocb *iocb, struct iov_iter *from)
 	    iocb->ki_pos + count > i_size_read(inode))
 		return -EAGAIN;
 
-	err = f2fs_zero_post_eof_page(inode,
-		iocb->ki_pos + iov_iter_count(from), true, true);
+	old_size = i_size_read(inode);
+
+	/*
+	 * Compressed file doesn't zero on-disk post-EOF data when shrinking
+	 * i_size, see f2fs_zero_tail_on_shrink(), so zero it synchronously.
+	 */
+	if (f2fs_compressed_file(inode)) {
+		err = f2fs_zero_post_eof_page(inode, iocb->ki_pos + count,
+					      true, true);
+		return err ? err : count;
+	}
+
+	err = f2fs_zero_post_eof_page(inode, iocb->ki_pos + count, true, false);
 	if (err)
 		return err;
+
+	/*
+	 * Plain append (ki_pos <= i_size) has no gap: written data covers
+	 * [i_size, ki_pos + count), and writeback zeroes data beyond new
+	 * i_size, on-disk post-EOF data was zeroed by truncation as well,
+	 * see f2fs_zero_tail_on_shrink().
+	 *
+	 * If there is a gap [i_size, ki_pos):
+	 * - gap ends inside the last page: zero it in pagecache, the page
+	 *   will be dirtied and written back along w/ written data.
+	 * - gap reaches the end of the last page, e.g. direct write: zero
+	 *   it and write it back synchronously, since the page won't be
+	 *   covered by this write.
+	 *
+	 * Skip atomic file, its data will be written to cow_inode and
+	 * committed atomically.
+	 */
+	if (iocb->ki_pos > old_size && !f2fs_is_atomic_file(inode)) {
+		bool sync = iocb->ki_pos >= round_up(old_size, PAGE_SIZE);
+
+		err = do_zero_post_eof_page(inode, iocb->ki_pos, sync);
+		if (err)
+			return err;
+	}
 	return count;
 }
 
