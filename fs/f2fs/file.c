@@ -5521,6 +5521,15 @@ static ssize_t f2fs_write_checks(struct kiocb *iocb, struct iov_iter *from)
 	if (err)
 		return err;
 
+	/*
+	 * f2fs_zero_post_eof_page() may block on invalidate_lock, foreground
+	 * GC, checkpoint and IO, and no-wait IO can't extend i_size anyway
+	 * since it can't allocate blocks.
+	 */
+	if ((iocb->ki_flags & IOCB_NOWAIT) &&
+	    iocb->ki_pos + count > i_size_read(inode))
+		return -EAGAIN;
+
 	err = f2fs_zero_post_eof_page(inode,
 		iocb->ki_pos + iov_iter_count(from), true, true);
 	if (err)
