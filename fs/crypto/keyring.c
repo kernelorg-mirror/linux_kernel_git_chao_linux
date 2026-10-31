@@ -25,6 +25,7 @@
 #include <linux/random.h>
 #include <linux/seq_file.h>
 #include <linux/unaligned.h>
+#include <linux/writeback.h>
 
 #include "fscrypt_private.h"
 
@@ -949,6 +950,16 @@ static void evict_dentries_for_decrypted_inodes(struct fscrypt_master_key *mk)
 	iput(toput_inode);
 }
 
+static bool has_decrypted_inodes(struct fscrypt_master_key *mk)
+{
+	bool ret;
+
+	spin_lock(&mk->mk_decrypted_inodes_lock);
+	ret = !list_empty(&mk->mk_decrypted_inodes);
+	spin_unlock(&mk->mk_decrypted_inodes_lock);
+	return ret;
+}
+
 static int check_for_busy_inodes(struct super_block *sb,
 				 struct fscrypt_master_key *mk)
 {
@@ -1016,6 +1027,17 @@ static int try_to_lock_encrypted_files(struct super_block *sb,
 	 * through the inodes' alias lists and try to evict each dentry.
 	 */
 	evict_dentries_for_decrypted_inodes(mk);
+
+	/*
+	 * Inodes may be pinned temporarily by in-flight cgroup writeback
+	 * switches, e.g. after the cgroup which dirtied them was offlined,
+	 * then they can't be evicted above even though they are unused.
+	 * Wait for the switches to drop their inode references, and retry.
+	 */
+	if (has_decrypted_inodes(mk)) {
+		cgroup_writeback_wait_switches(sb);
+		evict_dentries_for_decrypted_inodes(mk);
+	}
 
 	/*
 	 * evict_dentries_for_decrypted_inodes() already iput() each inode in

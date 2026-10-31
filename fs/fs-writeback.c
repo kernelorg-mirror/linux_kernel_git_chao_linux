@@ -1266,6 +1266,29 @@ void cgroup_writeback_umount(struct super_block *sb)
 	cgroup_writeback_drain(sb);
 }
 
+/**
+ * cgroup_writeback_wait_switches - wait for in-flight inode wb switches on @sb
+ * @sb: target super_block
+ *
+ * An inode wb switch holds a reference of the inode until the switch is
+ * completed by the worker, which may prevent the inode from being evicted,
+ * e.g. inodes attached to an offlined cgwb are switched asynchronously by
+ * cleanup_offline_cgwbs_workfn().  Wait until all in-flight inode wb
+ * switches on @sb have been completed, so that the inode references held
+ * by them are dropped.
+ *
+ * Unlike cgroup_writeback_umount(), @sb is still active, new switches can
+ * start concurrently and be waited on as well, so the wait is killable.
+ */
+void cgroup_writeback_wait_switches(struct super_block *sb)
+{
+	if (!(sb->s_bdi->capabilities & BDI_CAP_WRITEBACK))
+		return;
+
+	wait_var_event_killable(&sb->s_isw_nr_in_flight,
+				!atomic_read(&sb->s_isw_nr_in_flight));
+}
+
 static int __init cgroup_writeback_init(void)
 {
 	isw_wq = alloc_workqueue("inode_switch_wbs", WQ_PERCPU, 0);

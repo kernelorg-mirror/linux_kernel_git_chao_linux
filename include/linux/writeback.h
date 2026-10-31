@@ -208,6 +208,7 @@ void wbc_account_cgroup_owner(struct writeback_control *wbc, struct folio *folio
 int cgroup_writeback_by_id(u64 bdi_id, int memcg_id,
 			   enum wb_reason reason, struct wb_completion *done);
 void cgroup_writeback_umount(struct super_block *sb);
+void cgroup_writeback_wait_switches(struct super_block *sb);
 bool cleanup_offline_cgwb(struct bdi_writeback *wb);
 
 /**
@@ -296,6 +297,10 @@ static inline void wbc_account_cgroup_owner(struct writeback_control *wbc,
 }
 
 static inline void cgroup_writeback_umount(struct super_block *sb)
+{
+}
+
+static inline void cgroup_writeback_wait_switches(struct super_block *sb)
 {
 }
 
