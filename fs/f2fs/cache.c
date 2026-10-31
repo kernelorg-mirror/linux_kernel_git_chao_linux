@@ -43,6 +43,16 @@ void f2fs_cache_wait_writeback(struct f2fs_cached_block *entry)
 	if (!entry->cache)
 		return;
 
+	/*
+	 * GC migrates data blocks of post-read and atomic files via meta
+	 * cache entries, and writes them w/ DATA bios (see move_data_block()),
+	 * so such entry can be under writeback in a cached DATA bio which GC
+	 * has not submitted yet, e.g. when GC is waiting for a node cache
+	 * entry locked by us, submit it as well to avoid deadlock.
+	 */
+	if (IS_META_CACHE(entry->cache) && f2fs_cache_test_writeback(entry))
+		f2fs_submit_merged_write_cache(entry->cache->sbi, entry, 0, DATA);
+
 	f2fs_cache_wait_writeback_cond(entry,
 			IS_META_CACHE(entry->cache) ? META : NODE);
 }
